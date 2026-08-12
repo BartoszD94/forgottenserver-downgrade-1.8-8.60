@@ -63,6 +63,10 @@ if (ENABLE_ASAN)
     else ()
         add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
         add_link_options(-fsanitize=address)
+        # ASan plus optimisation makes GCC emit spurious -Wstringop-overflow and
+        # -Wmaybe-uninitialized inside libstdc++ headers. With -Werror that alone
+        # makes the sanitizer build impossible, so relax it for this build only.
+        add_compile_options(-Wno-error)
     endif ()
 endif ()
 
