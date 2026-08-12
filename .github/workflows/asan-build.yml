@@ -93,8 +93,7 @@ jobs:
           git clone --depth 1 --branch v6.4.1 https://github.com/simdutf/simdutf.git
           cd simdutf
           cmake -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo
-          -DENABLE_ASAN=ON \
+            -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr/local \
             -DSIMDUTF_TESTS=OFF \
             -DSIMDUTF_BENCHMARKS=OFF
@@ -109,8 +108,7 @@ jobs:
           cd mio
           git checkout 8b6b7d878c89e81614d05edca7936de41ccdd2da
           cmake -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo
-          -DENABLE_ASAN=ON \
+            -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr/local
           cmake --build build
           sudo cmake --install build
