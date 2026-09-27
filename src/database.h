@@ -282,7 +282,10 @@ public:
 	explicit DBInsert(std::string_view query);
 	bool addRow(std::string_view row);
 	bool addRow(std::ostringstream& row);
+	// Like addRow but never executes a partial INSERT; returns false if the batch would exceed max packet size.
+	bool appendRowForBatch(std::string_view row);
 	bool execute();
+	[[nodiscard]] std::string buildQuery() const;
 
 	void upsert(const std::vector<std::string>& columns);
 

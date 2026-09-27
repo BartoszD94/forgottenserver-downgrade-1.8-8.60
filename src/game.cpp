@@ -223,9 +223,122 @@ void closeContainersFromOtherInstances(Player* player)
 struct QuickLootResult
 {
 	uint32_t movedItems = 0;
+	uint32_t totalLootedGold = 0;
+	uint32_t totalLootedItems = 0;
 	bool hadLoot = false;
+	bool missedAnyGold = false;
+	bool missedAnyItem = false;
+	bool shouldNotifyCapacity = false;
+	bool shouldNotifyNotEnoughRoom = false;
 	ReturnValue failure = RETURNVALUE_NOERROR;
 };
+
+constexpr MessageClasses QUICK_LOOT_MESSAGE_TYPE = MESSAGE_STATUS_SMALL;
+
+bool hasQuickLootFeedback(const QuickLootResult& result)
+{
+	return result.movedItems > 0 || result.hadLoot || result.missedAnyGold || result.missedAnyItem;
+}
+
+void mergeQuickLootResult(QuickLootResult& aggregate, const QuickLootResult& result)
+{
+	aggregate.movedItems += result.movedItems;
+	aggregate.totalLootedGold += result.totalLootedGold;
+	aggregate.totalLootedItems += result.totalLootedItems;
+	aggregate.hadLoot = aggregate.hadLoot || result.hadLoot;
+	aggregate.missedAnyGold = aggregate.missedAnyGold || result.missedAnyGold;
+	aggregate.missedAnyItem = aggregate.missedAnyItem || result.missedAnyItem;
+	aggregate.shouldNotifyCapacity = aggregate.shouldNotifyCapacity || result.shouldNotifyCapacity;
+	aggregate.shouldNotifyNotEnoughRoom = aggregate.shouldNotifyNotEnoughRoom || result.shouldNotifyNotEnoughRoom;
+	if (result.failure != RETURNVALUE_NOERROR && aggregate.failure == RETURNVALUE_NOERROR) {
+		aggregate.failure = result.failure;
+	}
+}
+
+void sendQuickLootResultMessage(Player* player, const QuickLootResult& result)
+{
+	if (!player) {
+		return;
+	}
+
+	std::ostringstream ss;
+	if (result.totalLootedGold != 0 || result.missedAnyGold || result.totalLootedItems != 0 || result.missedAnyItem) {
+		const bool lootedAllGold = result.totalLootedGold != 0 && !result.missedAnyGold;
+		const bool lootedAllItems = result.totalLootedItems != 0 && !result.missedAnyItem;
+		if (lootedAllGold) {
+			if (result.totalLootedItems != 0 || result.missedAnyItem) {
+				ss << "You looted the complete " << result.totalLootedGold << " gold";
+				if (lootedAllItems) {
+					ss << " and all dropped items";
+				} else if (result.totalLootedItems != 0) {
+					ss << ", but you only looted some of the items";
+				} else if (result.missedAnyItem) {
+					ss << " but none of the dropped items";
+				}
+			} else {
+				ss << "You looted " << result.totalLootedGold << " gold";
+			}
+		} else if (lootedAllItems) {
+			if (result.totalLootedItems == 1) {
+				ss << "You looted 1 item";
+			} else if (result.totalLootedGold != 0 || result.missedAnyGold) {
+				ss << "You looted all of the dropped items";
+			} else {
+				ss << "You looted all items";
+			}
+
+			if (result.totalLootedGold != 0) {
+				ss << ", but you only looted " << result.totalLootedGold << " of the dropped gold";
+			} else if (result.missedAnyGold) {
+				ss << " but none of the dropped gold";
+			}
+		} else if (result.totalLootedGold != 0) {
+			ss << "You only looted " << result.totalLootedGold << " of the dropped gold";
+			if (result.totalLootedItems != 0) {
+				ss << " and some of the dropped items";
+			} else if (result.missedAnyItem) {
+				ss << " but none of the dropped items";
+			}
+		} else if (result.totalLootedItems != 0) {
+			ss << "You looted some of the dropped items";
+			if (result.missedAnyGold) {
+				ss << " but none of the dropped gold";
+			}
+		} else if (result.missedAnyGold) {
+			ss << "You looted none of the dropped gold";
+			if (result.missedAnyItem) {
+				ss << " and none of the items";
+			}
+		} else if (result.missedAnyItem) {
+			ss << "You looted none of the dropped items";
+		}
+	} else {
+		ss << "No loot";
+	}
+	ss << '.';
+	player->sendTextMessage(QUICK_LOOT_MESSAGE_TYPE, ss.str());
+
+	if (result.shouldNotifyCapacity) {
+		player->sendTextMessage(MESSAGE_EVENT_ADVANCE,
+		                        "Attention! The loot you are trying to pick up is too heavy for you to carry.");
+	} else if (result.shouldNotifyNotEnoughRoom) {
+		player->sendTextMessage(MESSAGE_EVENT_ADVANCE,
+		                        "Attention! One of your assigned loot containers is full.");
+	}
+}
+
+void dispatchQuickLootFeedback(Player* player, const QuickLootResult& result)
+{
+	if (!player) {
+		return;
+	}
+
+	if (!hasQuickLootFeedback(result) && result.failure != RETURNVALUE_NOERROR) {
+		player->sendCancelMessage(result.failure);
+	} else if (hasQuickLootFeedback(result)) {
+		sendQuickLootResultMessage(player, result);
+	}
+}
 
 bool hasQuickLootDisabled(const Item* item)
 {
@@ -305,6 +418,93 @@ bool isValidObjectCategory(ObjectCategory_t category)
 	return value >= OBJECTCATEGORY_FIRST && value <= OBJECTCATEGORY_LAST && value != 26;
 }
 
+std::optional<ObjectCategory_t> getQuickLootCategoryFromPrimaryType(const ItemType& itemType)
+{
+	if (itemType.primaryType.empty()) {
+		return std::nullopt;
+	}
+
+	static const std::unordered_map<std::string, ObjectCategory_t> categoryByPrimaryType = {
+	    {"food", OBJECTCATEGORY_FOOD},
+	    {"potion", OBJECTCATEGORY_POTIONS},
+	    {"potions", OBJECTCATEGORY_POTIONS},
+	    {"creatureproduct", OBJECTCATEGORY_CREATUREPRODUCTS},
+	    {"creature products", OBJECTCATEGORY_CREATUREPRODUCTS},
+	    {"valuable", OBJECTCATEGORY_VALUABLES},
+	    {"valuables", OBJECTCATEGORY_VALUABLES},
+	    {"tool", OBJECTCATEGORY_TOOLS},
+	    {"tools", OBJECTCATEGORY_TOOLS},
+	    {"decoration", OBJECTCATEGORY_DECORATION},
+	};
+
+	const auto it = categoryByPrimaryType.find(itemType.primaryType);
+	if (it == categoryByPrimaryType.end()) {
+		return std::nullopt;
+	}
+	return it->second;
+}
+
+std::optional<ObjectCategory_t> getQuickLootCategoryFromItemType(ItemTypes_t type)
+{
+	switch (type) {
+		case ITEM_TYPE_CREATUREPRODUCT:
+			return OBJECTCATEGORY_CREATUREPRODUCTS;
+		case ITEM_TYPE_FOOD:
+			return OBJECTCATEGORY_FOOD;
+		case ITEM_TYPE_VALUABLE:
+			return OBJECTCATEGORY_VALUABLES;
+		case ITEM_TYPE_POTION:
+			return OBJECTCATEGORY_POTIONS;
+		case ITEM_TYPE_TOOL:
+			return OBJECTCATEGORY_TOOLS;
+		case ITEM_TYPE_DECORATION:
+			return OBJECTCATEGORY_DECORATION;
+		default:
+			return std::nullopt;
+	}
+}
+
+bool isQuickLootPotionByName(const ItemType& itemType)
+{
+	const std::string& name = asLowerCaseString(itemType.name);
+	return name.find("potion") != std::string::npos || name.find("antidote") != std::string::npos;
+}
+
+bool isQuickLootFoodByUseAction(const Item* item, const ItemType& itemType)
+{
+	if (!item || !g_actions || itemType.isRune() || itemType.type == ITEM_TYPE_POTION ||
+	    itemType.lootType == ITEM_TYPE_POTION || !itemType.useable) {
+		return false;
+	}
+
+	if (isQuickLootPotionByName(itemType)) {
+		return false;
+	}
+
+	return g_actions->hasRegisteredUseAction(item->getID());
+}
+
+bool isQuickLootCreatureProductByWareId(const ItemType& itemType)
+{
+	if (!itemType.isPickupable() || itemType.weaponType != WEAPON_NONE || itemType.useable) {
+		return false;
+	}
+
+	if (itemType.type == ITEM_TYPE_RUNE || itemType.type == ITEM_TYPE_CONTAINER || itemType.isRune()) {
+		return false;
+	}
+
+	if (itemType.slotPosition != 0 && itemType.slotPosition != SLOTP_HAND) {
+		return false;
+	}
+
+	if (itemType.armor != 0 || itemType.attack != 0 || itemType.defense != 0) {
+		return false;
+	}
+
+	return itemType.wareId != 0;
+}
+
 ObjectCategory_t getQuickLootObjectCategory(const Item* item)
 {
 	if (!item) {
@@ -366,6 +566,31 @@ ObjectCategory_t getQuickLootObjectCategory(const Item* item)
 	if (itemType.type == ITEM_TYPE_CONTAINER) {
 		return OBJECTCATEGORY_CONTAINERS;
 	}
+
+	if (itemType.lootType != ITEM_TYPE_NONE) {
+		if (const auto category = getQuickLootCategoryFromItemType(itemType.lootType); category.has_value()) {
+			return *category;
+		}
+	} else if (const auto category = getQuickLootCategoryFromItemType(itemType.type); category.has_value()) {
+		return *category;
+	}
+
+	if (itemType.lootType == ITEM_TYPE_NONE) {
+		if (const auto category = getQuickLootCategoryFromPrimaryType(itemType); category.has_value()) {
+			return *category;
+		}
+	}
+
+	if (isQuickLootPotionByName(itemType)) {
+		return OBJECTCATEGORY_POTIONS;
+	}
+	if (isQuickLootFoodByUseAction(item, itemType)) {
+		return OBJECTCATEGORY_FOOD;
+	}
+	if (isQuickLootCreatureProductByWareId(itemType)) {
+		return OBJECTCATEGORY_CREATUREPRODUCTS;
+	}
+
 	return OBJECTCATEGORY_DEFAULT;
 }
 
@@ -379,29 +604,31 @@ ContainerPtr getMainBackpackRef(Game& game, Player* player)
 	return game.getContainerSharedRef(backpackItem ? backpackItem->getContainer() : nullptr);
 }
 
-ContainerPtr getQuickLootDestinationRef(Game& game, Player* player, ObjectCategory_t category)
+ContainerPtr getQuickLootDestinationRef(Game& game, Player* player, ObjectCategory_t category, bool isLootContainer)
 {
 	if (!player) {
 		return nullptr;
 	}
 
 	player->ensureQuickLootStateLoaded();
-	if (ContainerPtr container = player->getManagedLootContainerRef(category, true)) {
+	if (ContainerPtr container = player->getManagedLootContainerRef(category, isLootContainer)) {
 		return container;
+	}
+	// Obtain routing (NPC buy, etc.) must not use the loot "fallback to main" bag.
+	if (!isLootContainer) {
+		return nullptr;
 	}
 	return getMainBackpackRef(game, player);
 }
 
-ReturnValue moveQuickLootItem(Game& game, Player* player, const std::shared_ptr<Item>& itemRef,
-                              const ContainerPtr& destination)
+void collectManagedContainerDestinations(Game& game, const ContainerPtr& root, std::vector<ContainerPtr>& destinations)
 {
-	Item* item = itemRef.get();
-	if (!player || !item || !destination) {
-		return RETURNVALUE_NOTPOSSIBLE;
+	destinations.clear();
+	if (!root) {
+		return;
 	}
 
-	std::vector<ContainerPtr> destinations;
-	destinations.push_back(destination);
+	destinations.push_back(root);
 	for (size_t index = 0; index < destinations.size(); ++index) {
 		Container* current = destinations[index].get();
 		if (!current) {
@@ -417,6 +644,19 @@ ReturnValue moveQuickLootItem(Game& game, Player* player, const std::shared_ptr<
 			}
 		}
 	}
+}
+
+ReturnValue depositItemInManagedContainers(Game& game, Player* player, const std::shared_ptr<Item>& itemRef,
+                                           const ContainerPtr& destination, uint32_t& remainderCount)
+{
+	Item* item = itemRef.get();
+	if (!player || !item || !destination) {
+		return RETURNVALUE_NOTPOSSIBLE;
+	}
+
+	remainderCount = 0;
+	std::vector<ContainerPtr> destinations;
+	collectManagedContainerDestinations(game, destination, destinations);
 
 	ReturnValue lastRet = RETURNVALUE_CONTAINERNOTENOUGHROOM;
 	for (const ContainerPtr& targetRef : destinations) {
@@ -432,8 +672,21 @@ ReturnValue moveQuickLootItem(Game& game, Player* player, const std::shared_ptr<
 		}
 
 		Creature* actor = target->getID() == ITEM_GOLD_POUCH ? nullptr : player;
-		ReturnValue ret = game.internalMoveItem(item->getParent(), target, INDEX_WHEREEVER, item,
-		                                        item->getItemCount(), nullptr, 0, actor);
+		Cylinder* itemParent = item->getParent();
+		const bool fromLuaTempItem = itemParent == VirtualCylinder::virtualCylinder;
+		ReturnValue ret;
+		if (itemParent && !fromLuaTempItem) {
+			ret = game.internalMoveItem(itemParent, target, INDEX_WHEREEVER, item, item->getItemCount(), nullptr, 0,
+			                            actor);
+		} else {
+			uint32_t addRemainder = 0;
+			ret = game.internalAddItem(target, item, INDEX_WHEREEVER, 0, false, addRemainder);
+			if (ret == RETURNVALUE_NOERROR || item->isRemoved()) {
+				remainderCount = addRemainder;
+				return RETURNVALUE_NOERROR;
+			}
+		}
+
 		if (ret == RETURNVALUE_NOERROR || item->isRemoved()) {
 			return RETURNVALUE_NOERROR;
 		}
@@ -444,6 +697,37 @@ ReturnValue moveQuickLootItem(Game& game, Player* player, const std::shared_ptr<
 	}
 
 	return lastRet;
+}
+
+ReturnValue moveQuickLootItem(Game& game, Player* player, const std::shared_ptr<Item>& itemRef,
+                              const ContainerPtr& destination)
+{
+	uint32_t unusedRemainder = 0;
+	return depositItemInManagedContainers(game, player, itemRef, destination, unusedRemainder);
+}
+
+ReturnValue internalCollectManagedItems(Game& game, Player* player, Item* item, ObjectCategory_t category,
+                                        bool isLootContainer, uint32_t& remainderCount)
+{
+	if (!player || !item) {
+		return RETURNVALUE_NOTPOSSIBLE;
+	}
+
+	if (isLootContainer && !shouldQuickLootItem(player, item)) {
+		return RETURNVALUE_NOTPOSSIBLE;
+	}
+
+	const ContainerPtr destination = getQuickLootDestinationRef(game, player, category, isLootContainer);
+	if (!destination) {
+		return RETURNVALUE_NOTPOSSIBLE;
+	}
+
+	const std::shared_ptr<Item> itemRef = game.getItemSharedRef(item);
+	if (!itemRef) {
+		return RETURNVALUE_NOTPOSSIBLE;
+	}
+
+	return depositItemInManagedContainers(game, player, itemRef, destination, remainderCount);
 }
 
 QuickLootResult collectQuickLootContainer(Game& game, Player* player, const ContainerPtr& containerRef)
@@ -459,7 +743,16 @@ QuickLootResult collectQuickLootContainer(Game& game, Player* player, const Cont
 	std::vector<std::shared_ptr<Item>> lootItems;
 	for (ContainerIterator it = container->iterator(); it.hasNext(); it.advance()) {
 		auto item = *it;
-		if (!item || item->isRemoved() || !shouldQuickLootItem(player, item.get())) {
+		if (!item || item->isRemoved()) {
+			continue;
+		}
+
+		if (!shouldQuickLootItem(player, item.get())) {
+			if (item->getWorth() > 0) {
+				result.missedAnyGold = true;
+			} else if (item->isPickupable()) {
+				result.missedAnyItem = true;
+			}
 			continue;
 		}
 
@@ -483,10 +776,16 @@ QuickLootResult collectQuickLootContainer(Game& game, Player* player, const Cont
 		}
 
 		ObjectCategory_t category = getQuickLootObjectCategory(item);
-		ContainerPtr destination = getQuickLootDestinationRef(game, player, category);
+		ContainerPtr destination = getQuickLootDestinationRef(game, player, category, true);
 		if (!destination) {
 			if (result.failure == RETURNVALUE_NOERROR) {
 				result.failure = RETURNVALUE_CONTAINERNOTENOUGHROOM;
+			}
+			result.shouldNotifyNotEnoughRoom = true;
+			if (item->getWorth() > 0) {
+				result.missedAnyGold = true;
+			} else {
+				result.missedAnyItem = true;
 			}
 			continue;
 		}
@@ -497,25 +796,66 @@ QuickLootResult collectQuickLootContainer(Game& game, Player* player, const Cont
 		}
 
 		const uint16_t originalCount = item->getItemCount();
+		const uint32_t originalWorth = item->getWorth();
 		ReturnValue ret = moveQuickLootItem(game, player, itemRef, destination);
 		if (ret == RETURNVALUE_NOERROR) {
 			++result.movedItems;
+			if (originalWorth > 0) {
+				result.totalLootedGold += originalWorth;
+			} else {
+				++result.totalLootedItems;
+			}
 			continue;
 		}
 
 		const uint16_t remainingCount = item->isRemoved() ? 0 : item->getItemCount();
 		if (remainingCount < originalCount) {
 			++result.movedItems;
-		} else if (result.failure == RETURNVALUE_NOERROR) {
+			if (originalWorth > 0) {
+				const uint32_t remainingWorth = item->isRemoved() ? 0 : item->getWorth();
+				result.totalLootedGold += originalWorth - remainingWorth;
+				if (remainingWorth > 0) {
+					result.missedAnyGold = true;
+				}
+			} else {
+				++result.totalLootedItems;
+				if (!item->isRemoved()) {
+					result.missedAnyItem = true;
+				}
+			}
+			if (ret == RETURNVALUE_NOTENOUGHCAPACITY) {
+				result.shouldNotifyCapacity = true;
+			} else if (ret == RETURNVALUE_CONTAINERNOTENOUGHROOM) {
+				result.shouldNotifyNotEnoughRoom = true;
+			}
+			continue;
+		}
+
+		if (ret == RETURNVALUE_NOTENOUGHCAPACITY) {
+			result.shouldNotifyCapacity = true;
+		} else if (ret == RETURNVALUE_CONTAINERNOTENOUGHROOM) {
+			result.shouldNotifyNotEnoughRoom = true;
+		}
+
+		if (originalWorth > 0) {
+			result.missedAnyGold = true;
+		} else {
+			result.missedAnyItem = true;
+		}
+		if (result.failure == RETURNVALUE_NOERROR) {
 			result.failure = ret;
 		}
+	}
+
+	if (!container->isRemoved()) {
+		game.stopLootHighlight(container);
 	}
 
 	return result;
 }
 
 uint32_t collectQuickLootTile(Game& game, Player* player, const Position& pos, uint32_t maxCorpses,
-                              bool& foundCorpse, ReturnValue& firstFailure)
+                              bool& foundCorpse, ReturnValue& firstFailure, QuickLootResult& aggregate)
 {
 	const auto tile = game.getTileSharedRef(game.map.getTile(pos));
 	if (!tile) {
@@ -553,6 +893,7 @@ uint32_t collectQuickLootTile(Game& game, Player* player, const Position& pos, u
 
 		foundCorpse = true;
 		QuickLootResult result = collectQuickLootContainer(game, player, containerRef);
+		mergeQuickLootResult(aggregate, result);
 		if (result.movedItems > 0) {
 			++lootedCorpses;
 		} else if (result.failure != RETURNVALUE_NOERROR && firstFailure == RETURNVALUE_NOERROR) {
@@ -2615,9 +2956,31 @@ ReturnValue Game::internalPlayerAddItem(Player* player, Item* item, bool dropOnM
                                         slots_t slot /*= CONST_SLOT_WHEREEVER*/)
 {
 	uint32_t remainderCount = 0;
-	ReturnValue ret = internalAddItem(player, item, static_cast<int32_t>(slot), 0, false, remainderCount);
+	std::shared_ptr<Item> itemSnapshot;
+	if (slot == CONST_SLOT_WHEREEVER && item) {
+		itemSnapshot = item->clone();
+	}
+
+	ReturnValue ret;
+	if (slot == CONST_SLOT_WHEREEVER) {
+		const ObjectCategory_t category = getQuickLootObjectCategory(item);
+		ret = internalCollectManagedItems(*this, player, item, category, false, remainderCount);
+		if (ret != RETURNVALUE_NOERROR) {
+			remainderCount = 0;
+			ret = internalAddItem(player, item, static_cast<int32_t>(slot), 0, false, remainderCount);
+		}
+	} else {
+		ret = internalAddItem(player, item, static_cast<int32_t>(slot), 0, false, remainderCount);
+	}
+
 	if (remainderCount != 0) {
-		auto remainderItem = Item::CreateItem(item->getID(), static_cast<uint16_t>(remainderCount));
+		std::shared_ptr<Item> remainderItem;
+		if (itemSnapshot) {
+			remainderItem = itemSnapshot->clone();
+			remainderItem->setItemCount(static_cast<uint16_t>(remainderCount));
+		} else {
+			remainderItem = Item::CreateItem(item->getID(), static_cast<uint16_t>(remainderCount));
+		}
 		internalAddItem(player->getTile(), remainderItem.get(), INDEX_WHEREEVER, FLAG_NOLIMIT);
 	}
 
@@ -4009,13 +4372,17 @@ void Game::playerQuickLoot(uint32_t playerId, const Position& pos, uint16_t item
 
 		bool foundCorpse = false;
 		ReturnValue firstFailure = RETURNVALUE_NOERROR;
+		QuickLootResult aggregate;
 		const uint32_t lootedCorpses = collectQuickLootTile(*this, player, pos, maxQuickLootCorpses, foundCorpse,
-		                                                    firstFailure);
+		                                                    firstFailure, aggregate);
 		if (foundCorpse) {
-			if (lootedCorpses == 0 && firstFailure != RETURNVALUE_NOERROR) {
+			if (hasQuickLootFeedback(aggregate)) {
+				sendQuickLootResultMessage(player, aggregate);
+			} else if (lootedCorpses == 0 && firstFailure != RETURNVALUE_NOERROR) {
 				player->sendCancelMessage(firstFailure);
 			} else if (lootedCorpses > 1) {
-				player->sendTextMessage(MESSAGE_STATUS_SMALL, fmt::format("You looted {:d} corpses.", lootedCorpses));
+				player->sendTextMessage(QUICK_LOOT_MESSAGE_TYPE,
+				                        fmt::format("You looted {:d} corpses.", lootedCorpses));
 			}
 			player->maintainAttackFlow();
 			return;
@@ -4057,10 +4424,7 @@ void Game::playerQuickLoot(uint32_t playerId, const Position& pos, uint16_t item
 			return;
 		}
 
-		QuickLootResult result = collectQuickLootContainer(*this, player, containerRef);
-		if (result.movedItems == 0 && result.failure != RETURNVALUE_NOERROR) {
-			player->sendCancelMessage(result.failure);
-		}
+		dispatchQuickLootFeedback(player, collectQuickLootContainer(*this, player, containerRef));
 		player->maintainAttackFlow();
 		return;
 	}
@@ -4083,7 +4447,7 @@ void Game::playerQuickLoot(uint32_t playerId, const Position& pos, uint16_t item
 	}
 
 	ObjectCategory_t category = getQuickLootObjectCategory(item);
-	ContainerPtr destination = getQuickLootDestinationRef(*this, player, category);
+	ContainerPtr destination = getQuickLootDestinationRef(*this, player, category, true);
 	if (!destination) {
 		player->sendCancelMessage(RETURNVALUE_CONTAINERNOTENOUGHROOM);
 		return;
@@ -4120,6 +4484,7 @@ void Game::playerLootNearby(uint32_t playerId)
 	uint32_t lootedCorpses = 0;
 	bool foundCorpse = false;
 	ReturnValue firstFailure = RETURNVALUE_NOERROR;
+	QuickLootResult aggregate;
 
 	for (int32_t x = -1; x <= 1 && lootedCorpses < maxQuickLootCorpses; ++x) {
 		for (int32_t y = -1; y <= 1 && lootedCorpses < maxQuickLootCorpses; ++y) {
@@ -4128,16 +4493,20 @@ void Game::playerLootNearby(uint32_t playerId)
 			    static_cast<uint16_t>(static_cast<int32_t>(playerPos.y) + y),
 			    playerPos.z);
 			lootedCorpses += collectQuickLootTile(*this, player, tilePos,
-			                                      maxQuickLootCorpses - lootedCorpses, foundCorpse, firstFailure);
+			                                      maxQuickLootCorpses - lootedCorpses, foundCorpse, firstFailure,
+			                                      aggregate);
 		}
 	}
 
 	if (!foundCorpse) {
 		player->sendCancelMessage("No lootable corpses nearby.");
+	} else if (hasQuickLootFeedback(aggregate)) {
+		sendQuickLootResultMessage(player, aggregate);
 	} else if (lootedCorpses == 0 && firstFailure != RETURNVALUE_NOERROR) {
 		player->sendCancelMessage(firstFailure);
 	} else if (lootedCorpses > 1) {
-		player->sendTextMessage(MESSAGE_STATUS_SMALL, fmt::format("You looted {:d} corpses.", lootedCorpses));
+		player->sendTextMessage(QUICK_LOOT_MESSAGE_TYPE,
+		                        fmt::format("You looted {:d} corpses.", lootedCorpses));
 	}
 	player->maintainAttackFlow();
 }
@@ -4159,10 +4528,7 @@ void Game::playerQuickLootCorpse(uint32_t playerId, Container* container)
 		return;
 	}
 
-	QuickLootResult result = collectQuickLootContainer(*this, player, containerRef);
-	if (result.movedItems == 0 && result.hadLoot && result.failure != RETURNVALUE_NOERROR) {
-		player->sendCancelMessage(result.failure);
-	}
+	dispatchQuickLootFeedback(player, collectQuickLootContainer(*this, player, containerRef));
 }
 
 void Game::playerSetManagedLootContainer(uint32_t playerId, ObjectCategory_t category, const Position& pos,

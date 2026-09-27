@@ -36,6 +36,12 @@ static constexpr unsigned int MYSQL_TIMEOUT_SECONDS = 30;
 static constexpr uint64_t DB_INSERT_PACKET_SAFETY_MARGIN = 4096;
 
 namespace {
+uint64_t projectedInsertQueryLength(size_t currentLength, size_t additionalGrowth, size_t upsertClauseLength)
+{
+	// buildQuery() returns: query + " " + values + upsertClause
+	return static_cast<uint64_t>(currentLength) + additionalGrowth + 1 + upsertClauseLength;
+}
+
 thread_local std::vector<std::string>* tlsQueryCapture = nullptr;
 thread_local bool tlsSuppressConnectionErrorLogging = false;
 
@@ -750,12 +756,45 @@ bool DBInsert::addRow(std::string_view row)
 
 	const bool hasRows = !values.empty();
 	const size_t projectedRowLength = rowLength + (hasRows ? 3 : 2);
-	if (hasRows && static_cast<uint64_t>(length + projectedRowLength) > maxQueryLength && !execute()) {
+	if (hasRows &&
+	    projectedInsertQueryLength(length, projectedRowLength, upsertClause.length()) > maxQueryLength &&
+	    !execute()) {
 		return false;
 	}
 
 	const bool firstRow = values.empty();
 	if (values.empty()) {
+		values.reserve(rowLength + 2);
+		values.push_back('(');
+		values.append(row);
+		values.push_back(')');
+	} else {
+		values.reserve(values.length() + rowLength + 3);
+		values.push_back(',');
+		values.push_back('(');
+		values.append(row);
+		values.push_back(')');
+	}
+	length += rowLength + (firstRow ? 2 : 3);
+	return true;
+}
+
+bool DBInsert::appendRowForBatch(std::string_view row)
+{
+	const size_t rowLength = row.length();
+	const uint64_t maxPacketSize = Database::getInstance().getMaxPacketSize();
+	const uint64_t maxQueryLength = maxPacketSize > DB_INSERT_PACKET_SAFETY_MARGIN
+	                                    ? maxPacketSize - DB_INSERT_PACKET_SAFETY_MARGIN
+	                                    : maxPacketSize;
+
+	const bool hasRows = !values.empty();
+	const size_t projectedRowLength = rowLength + (hasRows ? 3 : 2);
+	if (projectedInsertQueryLength(length, projectedRowLength, upsertClause.length()) > maxQueryLength) {
+		return false;
+	}
+
+	const bool firstRow = values.empty();
+	if (firstRow) {
 		values.reserve(rowLength + 2);
 		values.push_back('(');
 		values.append(row);
@@ -778,13 +817,21 @@ bool DBInsert::addRow(std::ostringstream& row)
 	return ret;
 }
 
+std::string DBInsert::buildQuery() const
+{
+	if (values.empty()) {
+		return {};
+	}
+	return query + " " + values + upsertClause;
+}
+
 bool DBInsert::execute()
 {
 	if (values.empty()) {
 		return true;
 	}
 
-	std::string fullQuery = query + " " + values + upsertClause;
+	std::string fullQuery = buildQuery();
 	bool res = Database::getInstance().executeQuery(fullQuery);
 	values.clear();
 	length = query.length();

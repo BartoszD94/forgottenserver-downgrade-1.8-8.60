@@ -261,6 +261,7 @@ const std::unordered_map<std::string, ItemParseAttributes_t> ItemParseAttributes
     {"reduceskillloss", ITEM_PARSE_REDUCESKILLLOSS},
 	{"drop", ITEM_PARSE_DROPBONUS},
     {"primarytype", ITEM_PARSE_PRIMARYTYPE},
+    {"loottype", ITEM_PARSE_LOOTTYPE},
     {"elementalbond", ITEM_PARSE_ELEMENTALBOND},
     {"script", ITEM_PARSE_SCRIPT},
     {"mantra", ITEM_PARSE_MANTRA},
@@ -307,7 +308,14 @@ const std::unordered_map<std::string, ItemTypes_t> ItemTypesMap = {
 	{"bed", ITEM_TYPE_BED},
 	{"rune", ITEM_TYPE_RUNE},
 	{"rewardchest", ITEM_TYPE_REWARDCHEST},
-	{"carpet", ITEM_TYPE_CARPET}
+	{"carpet", ITEM_TYPE_CARPET},
+	{"food", ITEM_TYPE_FOOD},
+	{"potion", ITEM_TYPE_POTION},
+	{"valuable", ITEM_TYPE_VALUABLE},
+	{"creatureproduct", ITEM_TYPE_CREATUREPRODUCT},
+	{"tool", ITEM_TYPE_TOOL},
+	{"tools", ITEM_TYPE_TOOL},
+	{"decoration", ITEM_TYPE_DECORATION},
 };
 
 const std::unordered_map<std::string, tileflags_t> TileStatesMap = {
@@ -776,6 +784,65 @@ bool Items::loadFromOtb(const std::string& file)
 	return true;
 }
 
+ItemTypes_t Items::getLootType(const std::string& strValue) const
+{
+	const std::string normalized = asLowerCaseString(strValue);
+	if (normalized == "creature products") {
+		return ITEM_TYPE_CREATUREPRODUCT;
+	}
+
+	const auto it = ItemTypesMap.find(normalized);
+	if (it == ItemTypesMap.end()) {
+		return ITEM_TYPE_NONE;
+	}
+
+	switch (it->second) {
+		case ITEM_TYPE_FOOD:
+		case ITEM_TYPE_POTION:
+		case ITEM_TYPE_VALUABLE:
+		case ITEM_TYPE_CREATUREPRODUCT:
+		case ITEM_TYPE_TOOL:
+		case ITEM_TYPE_DECORATION:
+			return it->second;
+		default:
+			return ITEM_TYPE_NONE;
+	}
+}
+
+void Items::applyQuickLootTypeFromMetadata(ItemType& itemType)
+{
+	if (itemType.lootType != ITEM_TYPE_NONE) {
+		return;
+	}
+
+	switch (itemType.type) {
+		case ITEM_TYPE_FOOD:
+		case ITEM_TYPE_POTION:
+		case ITEM_TYPE_VALUABLE:
+		case ITEM_TYPE_CREATUREPRODUCT:
+		case ITEM_TYPE_TOOL:
+		case ITEM_TYPE_DECORATION:
+			itemType.lootType = itemType.type;
+			return;
+		default:
+			break;
+	}
+
+	if (!itemType.primaryType.empty()) {
+		if (const ItemTypes_t fromPrimary = getLootType(itemType.primaryType); fromPrimary != ITEM_TYPE_NONE) {
+			itemType.lootType = fromPrimary;
+			return;
+		}
+
+		if (itemType.primaryType == "liquids") {
+			const std::string& name = asLowerCaseString(itemType.name);
+			if (name.find("potion") != std::string::npos || name.find("antidote") != std::string::npos) {
+				itemType.lootType = ITEM_TYPE_POTION;
+			}
+		}
+	}
+}
+
 bool Items::loadFromXml()
 {
 	pugi::xml_document doc;
@@ -808,6 +875,12 @@ bool Items::loadFromXml()
 		uint16_t toId = pugi::cast<uint16_t>(toIdAttribute.value());
 		while (id <= toId) {
 			parseItemNode(itemNode, id++);
+		}
+	}
+
+	for (ItemType& itemType : items) {
+		if (itemType.id != 0) {
+			applyQuickLootTypeFromMetadata(itemType);
 		}
 	}
 	return true;
@@ -2209,6 +2282,14 @@ void Items::parseItemNode(const pugi::xml_node& itemNode, uint16_t id)
 
 				case ITEM_PARSE_PRIMARYTYPE: {
 					it.primaryType = asLowerCaseString(valueAttribute.as_string());
+					break;
+				}
+
+				case ITEM_PARSE_LOOTTYPE: {
+					const ItemTypes_t parsedLootType = getLootType(valueAttribute.as_string());
+					if (parsedLootType != ITEM_TYPE_NONE) {
+						it.lootType = parsedLootType;
+					}
 					break;
 				}
 

@@ -96,6 +96,30 @@ local CATEGORY_QUIVERS = 25
 local CATEGORY_SOUL_CORES = 26
 local CATEGORY_GOLD = 30
 
+local METADATA_CATEGORY_BY_TOKEN = {
+	["food"] = CATEGORY_FOOD,
+	["potion"] = CATEGORY_POTIONS,
+	["potions"] = CATEGORY_POTIONS,
+	["valuable"] = CATEGORY_VALUABLES,
+	["valuables"] = CATEGORY_VALUABLES,
+	["creature product"] = CATEGORY_CREATURE_PRODUCTS,
+	["creature products"] = CATEGORY_CREATURE_PRODUCTS,
+	["creatureproduct"] = CATEGORY_CREATURE_PRODUCTS,
+	["tool"] = CATEGORY_TOOLS,
+	["tools"] = CATEGORY_TOOLS,
+	["decoration"] = CATEGORY_DECORATION,
+}
+
+-- ItemTypes_t loot categories (src/items.h, after ITEM_TYPE_CARPET).
+local ITEM_TYPE_CATEGORY = {
+	[14] = CATEGORY_FOOD,
+	[15] = CATEGORY_POTIONS,
+	[16] = CATEGORY_VALUABLES,
+	[17] = CATEGORY_CREATURE_PRODUCTS,
+	[18] = CATEGORY_TOOLS,
+	[19] = CATEGORY_DECORATION,
+}
+
 local shopCategoryLookups = {
 	[CATEGORY_CREATURE_PRODUCTS] = {},
 	[CATEGORY_DECORATION] = {},
@@ -211,18 +235,23 @@ local function rollbackOfferClaim(offer, acceptedAmount)
 	)
 end
 
-local blockedItems = {}
+-- Shown in cyclopedia/market catalog, but players cannot create buy/sell offers.
+local marketTradeBlockedItems = {}
 for _, itemId in ipairs({
 	_G.ITEM_GOLD_COIN,
 	_G.ITEM_PLATINUM_COIN,
 	_G.ITEM_CRYSTAL_COIN,
 	_G.ITEM_GOLD_NUGGET,
-	MARKET_ITEM_ID
 }) do
 	if itemId then
-		blockedItems[itemId] = true
+		marketTradeBlockedItems[itemId] = true
 	end
 end
+
+-- Never listed in the custom market catalog (in-world market object).
+local marketCatalogBlockedItems = {
+	[MARKET_ITEM_ID] = true,
+}
 
 local function logInfo(message)
 	if logger and logger.info then
@@ -392,7 +421,52 @@ local function isPremiumScrollItem(itemType)
 	return itemType:getName():lower():find("premium scroll", 1, true) ~= nil
 end
 
-local function getItemCategory(itemType)
+local function normalizeMetadataToken(value)
+	if type(value) ~= "string" or value == "" then
+		return nil
+	end
+	return value:lower():gsub("[%s_%-]+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function getCategoryFromMetadata(attributes)
+	if not attributes then
+		return nil
+	end
+
+	for _, key in ipairs({ "loottype", "primarytype" }) do
+		local token = normalizeMetadataToken(attributes[key])
+		if token and METADATA_CATEGORY_BY_TOKEN[token] then
+			return METADATA_CATEGORY_BY_TOKEN[token]
+		end
+	end
+
+	return nil
+end
+
+local function getCategoryFromItemTypeEnum(itemType)
+	if not itemType or not itemType.getType then
+		return nil
+	end
+
+	return ITEM_TYPE_CATEGORY[itemType:getType()]
+end
+
+local function getItemCategory(itemType, xmlAttributes)
+	-- Currency must stay in cyclopedia Gold (30); Crystal XML tags coins as valuables.
+	if itemType:getWorth() > 0 then
+		return CATEGORY_GOLD
+	end
+
+	local metadataCategory = getCategoryFromMetadata(xmlAttributes)
+	if metadataCategory then
+		return metadataCategory
+	end
+
+	local enumCategory = getCategoryFromItemTypeEnum(itemType)
+	if enumCategory then
+		return enumCategory
+	end
+
 	if itemType:isRune() then
 		return CATEGORY_RUNES
 	end
@@ -434,9 +508,6 @@ local function getItemCategory(itemType)
 	elseif itemType:isRing() then
 		return CATEGORY_RINGS
 	end
-	if itemType:getWorth() > 0 then
-		return CATEGORY_GOLD
-	end
 
 	if isShopCategoryItem(CATEGORY_DECORATION, itemType:getId()) then
 		return CATEGORY_DECORATION
@@ -470,7 +541,7 @@ end
 
 local function isMarketableItem(itemId)
 	itemId = tonumber(itemId) or 0
-	if itemId <= 0 or itemId > 0xFFFF or blockedItems[itemId] then
+	if itemId <= 0 or itemId > 0xFFFF or marketCatalogBlockedItems[itemId] then
 		return false
 	end
 
@@ -563,7 +634,7 @@ local function addMarketItem(itemId, xmlName, xmlAttributes, itemNode)
 	local entry = {
 		id = itemId,
 		name = name,
-		category = getItemCategory(itemType),
+		category = getItemCategory(itemType, xmlAttributes),
 		moveeventVocation = moveeventVocation,
 		requiredLevel = requiredLevel,
 		restrictVocation = restrictVocation,
@@ -1984,6 +2055,10 @@ local function validateOfferPayload(player, actionType, itemId, amount, price)
 		return false, "This item cannot be traded on the market."
 	end
 
+	if marketTradeBlockedItems[itemId] then
+		return false, "This item cannot be traded on the market."
+	end
+
 	local itemType = ItemType(itemId)
 	local maxAmount = itemType:isStackable() and MARKET_MAX_AMOUNT_STACKABLE or MARKET_MAX_AMOUNT
 	if amount <= 0 or amount > maxAmount then
@@ -2419,7 +2494,7 @@ function acceptHandler.onReceive(player, msg)
 end
 acceptHandler:register()
 
-local marketSessionCleanup = CreatureEvent("CustomMarketSessionCleanup")
+marketSessionCleanup = CreatureEvent("CustomMarketSessionCleanup")
 function marketSessionCleanup.onLogout(player)
 	lastAction[player:getId()] = nil
 	marketDepotSessions[player:getId()] = nil
@@ -2429,7 +2504,7 @@ function marketSessionCleanup.onLogout(player)
 end
 marketSessionCleanup:register()
 
-local marketSessionInit = CreatureEvent("CustomMarketSessionInit")
+marketSessionInit = CreatureEvent("CustomMarketSessionInit")
 function marketSessionInit.onLogin(player)
 	player:registerEvent("CustomMarketSessionCleanup")
 	return true
