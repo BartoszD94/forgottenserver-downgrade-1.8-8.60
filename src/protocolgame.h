@@ -28,6 +28,7 @@ class ProtocolGame;
 struct BestiaryCreatureInfo;
 struct ProtocolGameCustomPingTestAccess;
 struct ProtocolGameAstraRegenerationTestAccess;
+struct ProtocolGameSpellCooldownTestAccess;
 using ProtocolGame_ptr = std::shared_ptr<ProtocolGame>;
 class ProtocolSpectator;
 
@@ -374,6 +375,7 @@ private:
 	bool shouldSendThingUpgradeClassification() const;
 	bool shouldSendItemTierData() const;
 	bool usesExtendedSpellIds() const;
+	bool usesExtendedSpellCooldownIds() const;
 	void sendNewPing(uint32_t pingId);
 	void parseNewPing(NetworkMessage& msg);
 	void parseCustomClientPing(NetworkMessage& msg);
@@ -397,6 +399,7 @@ private:
 	friend class SpySystem;
 	friend struct ProtocolGameCustomPingTestAccess;
 	friend struct ProtocolGameAstraRegenerationTestAccess;
+	friend struct ProtocolGameSpellCooldownTestAccess;
 
 	//cast
 	void spectatorTurn(uint8_t direction);
@@ -459,6 +462,7 @@ private:
 	bool supportsAstraStoreBasePrice = false;
 	bool supportsAstraStoreCatalogChunks = false;
 	bool supportsAstraBestiaryBannerCreatureData = false;
+	bool supportsAstraExtendedSpellIds = false;
 	bool supportsZoneWeather = false;
 	bool supportsDllZoneWeather = false;
 	bool zoneWeatherFeatureEnabled = false;
