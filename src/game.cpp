@@ -7109,6 +7109,9 @@ void Game::applyResetSystemBonuses(CombatDamage& damage, Player* attackerPlayer,
 
 bool Game::combatChangeHealth(Creature* attacker, Creature* target, CombatDamage& damage)
 {
+	PerformanceScope performanceScope(PerformanceMetric::CombatChangeHealth);
+	CombatPacketScope packetScope;
+	g_performanceMetrics.recordCombatWork(CombatWork::HealthEntries);
 	if (!target || target->isDead() || target->isRemoved()) {
 		return false;
 	}
@@ -7184,6 +7187,8 @@ bool Game::combatChangeHealth(Creature* attacker, Creature* target, CombatDamage
 		const auto& healEvents = target->getCreatureEvents(CREATURE_EVENT_HEALTHCHANGE);
 		if (!healEvents.empty()) {
 			for (CreatureEvent* creatureEvent : healEvents) {
+				PerformanceScope callbackScope(PerformanceMetric::CombatHealthCallbacks);
+				g_performanceMetrics.recordCombatWork(CombatWork::HealthCallbacks);
 				creatureEvent->executeHealthChange(target, attacker, damage);
 			}
 		}
@@ -7210,6 +7215,8 @@ bool Game::combatChangeHealth(Creature* attacker, Creature* target, CombatDamage
 			const auto& events = target->getCreatureEvents(CREATURE_EVENT_HEALTHCHANGE);
 			if (!events.empty()) {
 				for (CreatureEvent* creatureEvent : events) {
+					PerformanceScope callbackScope(PerformanceMetric::CombatHealthCallbacks);
+					g_performanceMetrics.recordCombatWork(CombatWork::HealthCallbacks);
 					creatureEvent->executeHealthChange(target, attacker, damage);
 				}
 				damage.origin = ORIGIN_NONE;
@@ -7372,6 +7379,8 @@ bool Game::combatChangeHealth(Creature* attacker, Creature* target, CombatDamage
 					const auto& events = target->getCreatureEvents(CREATURE_EVENT_MANACHANGE);
 					if (!events.empty()) {
 						for (CreatureEvent* creatureEvent : events) {
+							PerformanceScope callbackScope(PerformanceMetric::CombatManaCallbacks);
+							g_performanceMetrics.recordCombatWork(CombatWork::ManaCallbacks);
 							creatureEvent->executeManaChange(target, attacker, damage);
 						}
 						healthChange = damage.primary.value + damage.secondary.value;
@@ -7461,6 +7470,8 @@ bool Game::combatChangeHealth(Creature* attacker, Creature* target, CombatDamage
 			const auto& events = target->getCreatureEvents(CREATURE_EVENT_HEALTHCHANGE);
 			if (!events.empty()) {
 				for (CreatureEvent* creatureEvent : events) {
+					PerformanceScope callbackScope(PerformanceMetric::CombatHealthCallbacks);
+					g_performanceMetrics.recordCombatWork(CombatWork::HealthCallbacks);
 					creatureEvent->executeHealthChange(target, attacker, damage);
 				}
 				damage.origin = ORIGIN_NONE;
@@ -7617,13 +7628,18 @@ bool Game::combatChangeHealth(Creature* attacker, Creature* target, CombatDamage
 
 		if (realDamage >= targetHealth) {
 			for (CreatureEvent* creatureEvent : target->getCreatureEvents(CREATURE_EVENT_PREPAREDEATH)) {
+				PerformanceScope callbackScope(PerformanceMetric::CombatPrepareDeath);
+				g_performanceMetrics.recordCombatWork(CombatWork::PrepareDeathCallbacks);
 				if (!creatureEvent->executeOnPrepareDeath(target, attacker)) {
 					return false;
 				}
 			}
 		}
 
-		target->drainHealth(attackerRef, realDamage);
+		{
+			PerformanceScope applyScope(PerformanceMetric::CombatApplyHealth);
+			target->drainHealth(attackerRef, realDamage);
+		}
 		addCreatureHealth(spectators, target);
 
 		// onPlayerAttack callback
@@ -7645,6 +7661,9 @@ bool Game::combatChangeHealth(const std::shared_ptr<Creature>& attacker, const s
 
 bool Game::combatChangeMana(Creature* attacker, Creature* target, CombatDamage& damage)
 {
+	PerformanceScope performanceScope(PerformanceMetric::CombatChangeMana);
+	CombatPacketScope packetScope;
+	g_performanceMetrics.recordCombatWork(CombatWork::ManaEntries);
 	Player* targetPlayer = target->getPlayer();
 	if (!targetPlayer) {
 		return true;
@@ -7696,6 +7715,8 @@ bool Game::combatChangeMana(Creature* attacker, Creature* target, CombatDamage& 
 			const auto& events = target->getCreatureEvents(CREATURE_EVENT_MANACHANGE);
 			if (!events.empty()) {
 				for (CreatureEvent* creatureEvent : events) {
+					PerformanceScope callbackScope(PerformanceMetric::CombatManaCallbacks);
+					g_performanceMetrics.recordCombatWork(CombatWork::ManaCallbacks);
 					creatureEvent->executeManaChange(target, attacker, damage);
 				}
 				damage.origin = ORIGIN_NONE;
@@ -7782,6 +7803,8 @@ bool Game::combatChangeMana(Creature* attacker, Creature* target, CombatDamage& 
 			const auto& events = target->getCreatureEvents(CREATURE_EVENT_MANACHANGE);
 			if (!events.empty()) {
 				for (CreatureEvent* creatureEvent : events) {
+					PerformanceScope callbackScope(PerformanceMetric::CombatManaCallbacks);
+					g_performanceMetrics.recordCombatWork(CombatWork::ManaCallbacks);
 					creatureEvent->executeManaChange(target, attacker, damage);
 				}
 				damage.origin = ORIGIN_NONE;
@@ -7789,7 +7812,10 @@ bool Game::combatChangeMana(Creature* attacker, Creature* target, CombatDamage& 
 			}
 		}
 
-		targetPlayer->drainMana(attackerRef, manaLoss);
+		{
+			PerformanceScope applyScope(PerformanceMetric::CombatApplyMana);
+			targetPlayer->drainMana(attackerRef, manaLoss);
+		}
 
 		std::string spectatorMessage;
 
@@ -7853,13 +7879,17 @@ void Game::addCreatureHealth(const Creature* target)
 
 void Game::addCreatureHealth(const SpectatorVec& spectators, const Creature* target)
 {
+	PerformanceScope performanceScope(PerformanceMetric::CombatBroadcastHealth);
+	uint64_t candidates = 0;
 	for (const auto& spectator : spectators) {
 		Player* player = spectator ? spectator->getPlayer() : nullptr;
 		if (!player) {
 			continue;
 		}
 		player->sendCreatureHealth(target);
+		++candidates;
 	}
+	g_performanceMetrics.recordCombatDistribution(CombatDistribution::HealthCandidates, candidates);
 }
 
 void Game::addAnimatedText(std::string_view message, const Position& pos, TextColor_t color, uint32_t instanceId)
@@ -7877,13 +7907,17 @@ void Game::addAnimatedText(std::string_view message, const Position& pos, TextCo
 void Game::addAnimatedText(const SpectatorVec& spectators, std::string_view message, const Position& pos,
                            TextColor_t color)
 {
+	PerformanceScope performanceScope(PerformanceMetric::CombatBroadcastText);
+	uint64_t candidates = 0;
 	for (const auto& spectator : spectators) {
 		Player* player = spectator ? spectator->getPlayer() : nullptr;
 		if (!player) {
 			continue;
 		}
 		player->sendAnimatedText(message, pos, color);
+		++candidates;
 	}
+	g_performanceMetrics.recordCombatDistribution(CombatDistribution::TextCandidates, candidates);
 }
 
 void Game::addMagicEffect(const Position& pos, uint16_t effect, uint32_t instanceId)
@@ -7896,13 +7930,17 @@ void Game::addMagicEffect(const Position& pos, uint16_t effect, uint32_t instanc
 
 void Game::addMagicEffect(const SpectatorVec& spectators, const Position& pos, uint16_t effect)
 {
+	PerformanceScope performanceScope(PerformanceMetric::CombatBroadcastEffect);
+	uint64_t candidates = 0;
 	for (const auto& spectator : spectators) {
 		Player* player = spectator ? spectator->getPlayer() : nullptr;
 		if (!player) {
 			continue;
 		}
 		player->sendMagicEffect(pos, effect);
+		++candidates;
 	}
+	g_performanceMetrics.recordCombatDistribution(CombatDistribution::EffectCandidates, candidates);
 }
 
 void InstanceUtils::sendMagicEffectToInstance(const Position &pos, uint32_t instanceId, uint8_t effect)
@@ -7926,13 +7964,17 @@ void Game::addDistanceEffect(const Position& fromPos, const Position& toPos, uin
 void Game::addDistanceEffect(const SpectatorVec& spectators, const Position& fromPos, const Position& toPos,
                              uint16_t effect)
 {
+	PerformanceScope performanceScope(PerformanceMetric::CombatBroadcastDistance);
+	uint64_t candidates = 0;
 	for (const auto& spectator : spectators) {
 		Player* player = spectator ? spectator->getPlayer() : nullptr;
 		if (!player) {
 			continue;
 		}
 		player->sendDistanceShoot(fromPos, toPos, effect);
+		++candidates;
 	}
+	g_performanceMetrics.recordCombatDistribution(CombatDistribution::DistanceCandidates, candidates);
 }
 
 void Game::setAccountStorageValue(const uint32_t accountId, const uint32_t key, const int32_t value)

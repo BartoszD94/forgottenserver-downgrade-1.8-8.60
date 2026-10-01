@@ -444,10 +444,12 @@ void TaskReactor::executeReadyTasks(std::vector<Task>& readyTasks, std::chrono::
 		}
 
 		const auto taskStart = std::chrono::steady_clock::now();
+		uint64_t queueNanoseconds = 0;
 		try {
 			if (g_performanceMetrics.isEnabled()) {
 				const auto callbackStart = std::chrono::steady_clock::now();
 				const auto queueLatency = callbackStart > task.fireAt ? callbackStart - task.fireAt : std::chrono::steady_clock::duration::zero();
+				queueNanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(queueLatency).count();
 				g_performanceMetrics.record(PerformanceMetric::ReactorQueueLatency,
 					std::chrono::duration_cast<std::chrono::nanoseconds>(queueLatency).count());
 			}
@@ -468,7 +470,8 @@ void TaskReactor::executeReadyTasks(std::vector<Task>& readyTasks, std::chrono::
 		if (g_performanceMetrics.isEnabled()) {
 			const auto taskNanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(taskDuration).count();
 			g_performanceMetrics.recordReactorCallbackSource(
-				taskNanoseconds > 0 ? static_cast<uint64_t>(taskNanoseconds) : 0, task.description, task.origin);
+			    taskNanoseconds > 0 ? static_cast<uint64_t>(taskNanoseconds) : 0, task.description, task.origin,
+			    queueNanoseconds);
 		}
 		if (taskDuration > slowestDuration) {
 			slowestDuration = taskDuration;

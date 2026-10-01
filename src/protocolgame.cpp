@@ -3,39 +3,41 @@
 
 #include "otpch.h"
 
+#include "protocolgame.h"
+
+#include "account_coins.h"
 #include "actions.h"
 #include "astraclient.h"
-#include "bestiary_charm.h"
-#include "fonticakclient.h"
 #include "ban.h"
+#include "bestiary_charm.h"
 #include "character_bazaar.h"
-#include "account_coins.h"
+#include "configmanager.h"
+#include "creatureevent.h"
+#include "echo_raid.h"
+#include "familiar.h"
+#include "fonticakclient.h"
+#include "game.h"
+#include "imbuement.h"
+#include "instance_utils.h"
+#include "iologindata.h"
+#include "logger.h"
+#include "monster.h"
+#include "monsters.h"
+#include "outputmessage.h"
+#include "performance_metrics.h"
+#include "player.h"
+#include "protocollogin.h"
+#include "protocolspectator.h"
+#include "save_manager.h"
+#include "scheduler.h"
+#include "scriptmanager.h"
+#include "spells.h"
 #include "store/store_catalog.h"
 #include "store/store_name_validator.h"
 #include "store/store_protocol.h"
 #include "store/store_repository.h"
 #include "store/store_service.h"
 #include "store/store_types.h"
-#include "configmanager.h"
-#include "creatureevent.h"
-#include "echo_raid.h"
-#include "game.h"
-#include "iologindata.h"
-#include "save_manager.h"
-#include "instance_utils.h"
-#include "monster.h"
-#include "monsters.h"
-#include "outputmessage.h"
-#include "player.h"
-#include "protocolgame.h"
-#include "protocollogin.h"
-#include "protocolspectator.h"
-#include "imbuement.h"
-#include "familiar.h"
-#include "logger.h"
-#include "scheduler.h"
-#include "scriptmanager.h"
-#include "spells.h"
 #include "thread_pool.h"
 
 #include <algorithm>
@@ -45,11 +47,10 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <simdutf.h>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
-
-#include <simdutf.h>
 
 uint32_t ProtocolGame::spectatorId = 1;
 std::set<std::string> ProtocolGame::spectatorNames;
@@ -1360,6 +1361,11 @@ void ProtocolGame::dispatchCancelMessage(ReturnValue message) const
 
 void ProtocolGame::writeToOutputBuffer(const NetworkMessage& msg)
 {
+	PerformanceScope scope(PerformanceMetric::ProtocolOutputAppend);
+	if (msg.getLength() != 0) {
+		g_performanceMetrics.recordOutputPayload(msg.getBuffer()[NetworkMessage::INITIAL_BUFFER_POSITION],
+		                                         msg.getLength());
+	}
 	auto out = getOutputBuffer(msg.getLength());
 	out->append(msg);
 }
@@ -3447,6 +3453,8 @@ void ProtocolGame::sendBasicData()
 
 void ProtocolGame::sendTextMessage(const TextMessage& message)
 {
+	PerformanceScope scope(PerformanceMetric::ProtocolTextMessage);
+	g_performanceMetrics.recordSerializerInitialization(NETWORKMESSAGE_MAXSIZE);
 	NetworkMessage msg;
 	msg.addByte(0xB4);
 	msg.addByte(message.type);
@@ -3456,6 +3464,8 @@ void ProtocolGame::sendTextMessage(const TextMessage& message)
 
 void ProtocolGame::sendTextMessage(MessageClasses mclass, const std::string& message)
 {
+	PerformanceScope scope(PerformanceMetric::ProtocolTextMessage);
+	g_performanceMetrics.recordSerializerInitialization(NETWORKMESSAGE_MAXSIZE);
 	NetworkMessage msg;
 	msg.addByte(0xB4);
 	msg.addByte(mclass);
@@ -4028,6 +4038,7 @@ void ProtocolGame::sendCloseContainer(uint8_t cid)
 
 void ProtocolGame::sendCreatureTurn(const Creature* creature, uint32_t stackpos)
 {
+	PerformanceScope scope(PerformanceMetric::ProtocolCreatureTurn);
 	if (stackpos >= MAX_STACKPOS_THINGS || !canSee(creature)) {
 		return;
 	}
@@ -4037,6 +4048,7 @@ void ProtocolGame::sendCreatureTurn(const Creature* creature, uint32_t stackpos)
 		return;
 	}
 
+	g_performanceMetrics.recordSerializerInitialization(NETWORKMESSAGE_MAXSIZE);
 	NetworkMessage msg;
 	msg.addByte(0x6B);
 	msg.addPosition(creature->getPosition());
@@ -4286,6 +4298,8 @@ ProtocolGame::CustomPongResult ProtocolGame::receiveCustomPong(uint32_t id, int6
 
 void ProtocolGame::sendDistanceShoot(const Position& from, const Position& to, uint16_t type)
 {
+	PerformanceScope scope(PerformanceMetric::ProtocolDistanceEffect);
+	g_performanceMetrics.recordSerializerInitialization(NETWORKMESSAGE_MAXSIZE);
 	NetworkMessage msg;
 	msg.addByte(0x85);
 	msg.addPosition(from);
@@ -4296,6 +4310,7 @@ void ProtocolGame::sendDistanceShoot(const Position& from, const Position& to, u
 
 void ProtocolGame::sendMagicEffect(const Position& pos, uint16_t type)
 {
+	PerformanceScope scope(PerformanceMetric::ProtocolMagicEffect);
 	if (!canSee(pos)) {
 		return;
 	}
@@ -4305,6 +4320,7 @@ void ProtocolGame::sendMagicEffect(const Position& pos, uint16_t type)
 		return;
 	}
 
+	g_performanceMetrics.recordSerializerInitialization(NETWORKMESSAGE_MAXSIZE);
 	NetworkMessage msg;
 	msg.addByte(0x83);
 	msg.addPosition(pos);
@@ -4314,6 +4330,8 @@ void ProtocolGame::sendMagicEffect(const Position& pos, uint16_t type)
 
 void ProtocolGame::sendCreatureHealth(const Creature* creature)
 {
+	PerformanceScope scope(PerformanceMetric::ProtocolCreatureHealth);
+	g_performanceMetrics.recordSerializerInitialization(NETWORKMESSAGE_MAXSIZE);
 	NetworkMessage msg;
 	msg.addByte(0x8C);
 	msg.add<uint32_t>(creature->getID());
@@ -4938,6 +4956,7 @@ void ProtocolGame::sendFightModes()
 void ProtocolGame::sendAddCreature(const Creature* creature, const Position& pos, int32_t stackpos,
                                    MagicEffectClasses magicEffect /*= CONST_ME_NONE*/)
 {
+	PerformanceScope scope(PerformanceMetric::ProtocolCreatureAdd);
 	if (!canSee(pos)) {
 		return;
 	}
@@ -5038,6 +5057,7 @@ void ProtocolGame::sendAddCreature(const Creature* creature, const Position& pos
 void ProtocolGame::sendMoveCreature(const Creature* creature, const Position& newPos, int32_t newStackPos,
                                     const Position& oldPos, int32_t oldStackPos, bool teleport)
 {
+	PerformanceScope scope(PerformanceMetric::ProtocolCreatureMove);
 	if (spyActive_ && creature->getID() == spyTargetCreatureId_) {
 		spyViewportPos_ = newPos;
 
@@ -5933,10 +5953,12 @@ void ProtocolGame::sendVIP(uint32_t guid, std::string_view name, VipStatus_t sta
 
 void ProtocolGame::sendAnimatedText(std::string_view message, const Position& pos, TextColor_t color)
 {
+	PerformanceScope scope(PerformanceMetric::ProtocolAnimatedText);
 	if (!canSee(pos)) {
 		return;
 	}
 
+	g_performanceMetrics.recordSerializerInitialization(NETWORKMESSAGE_MAXSIZE);
 	NetworkMessage msg;
 	msg.addByte(0x84);
 	msg.addPosition(pos);

@@ -5764,6 +5764,7 @@ void Player::getPathSearchParams(const Creature* creature, FindPathParams& fpp) 
 
 void Player::doAttacking(uint32_t)
 {
+	PerformanceScope performanceScope(PerformanceMetric::PlayerDoAttacking);
 	if (lastAttack == 0) {
 		lastAttack = OTSYS_TIME() - getAttackSpeed() - 1;
 	}
@@ -5773,6 +5774,7 @@ void Player::doAttacking(uint32_t)
 	}
 
 	if ((OTSYS_TIME() - lastAttack) >= getAttackSpeed()) {
+		g_performanceMetrics.recordCombatWork(CombatWork::AttackAttempts);
 		bool result = false;
 
 		Item* tool = getWeapon();
@@ -5803,6 +5805,7 @@ void Player::doAttacking(uint32_t)
 		}
 
 		if (result) {
+			g_performanceMetrics.recordCombatWork(CombatWork::SuccessfulAttacks);
 			lastAttack = OTSYS_TIME();
 		}
 	}

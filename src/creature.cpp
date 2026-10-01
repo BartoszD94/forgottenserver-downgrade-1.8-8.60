@@ -265,6 +265,7 @@ void Creature::onThink(uint32_t interval)
 void Creature::onAttacking(uint32_t interval)
 {
 	PerformanceScope performanceScope(PerformanceMetric::CreatureOnAttacking);
+	CombatPacketScope packetScope;
 	// OPTIMIZATION: Removed redundant isDead/isRemoved checks.
 	// checkCreatures() already validates creature state before calling this.
 
