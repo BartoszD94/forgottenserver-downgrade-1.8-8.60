@@ -6,6 +6,9 @@
 #include "performance_metrics.h"
 
 #include "logger.h"
+#ifdef OUTPUTMESSAGE_POOL_DIAGNOSTICS
+#include "outputmessage.h"
+#endif
 
 #include <bit>
 
@@ -445,6 +448,11 @@ void PerformanceMetrics::maybeReport()
 		network.acceptErrors.exchange(0, std::memory_order_relaxed),
 		network.rateLimitRejections.exchange(0, std::memory_order_relaxed),
 		network.ipLimitRejections.exchange(0, std::memory_order_relaxed), currentConnections, maximumConnections);
+#ifdef OUTPUTMESSAGE_POOL_DIAGNOSTICS
+	const auto pool = OutputMessagePool::getDiagnostics();
+	report += fmt::format("\n[Perf] output_pool hits={} misses={} in_use={} peak_in_use={} overflow_frees={}",
+	                      pool.hits, pool.misses, pool.inUse, pool.peakInUse, pool.overflowFrees);
+#endif
 	LOG_INFO("{}", report);
 }
 

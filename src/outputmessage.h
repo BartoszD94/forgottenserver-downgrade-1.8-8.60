@@ -104,6 +104,13 @@ private:
 class OutputMessagePool
 {
 public:
+#ifdef OUTPUTMESSAGE_POOL_DIAGNOSTICS
+	struct Diagnostics
+	{
+		uint64_t hits, misses, inUse, peakInUse, overflowFrees;
+	};
+	static Diagnostics getDiagnostics() noexcept;
+#endif
 	// non-copyable
 	OutputMessagePool(const OutputMessagePool&) = delete;
 	OutputMessagePool& operator=(const OutputMessagePool&) = delete;

@@ -30,6 +30,7 @@ option(ENABLE_ASAN "Enable AddressSanitizer for memory diagnostics" OFF)
 option(ENABLE_TSAN "Enable ThreadSanitizer for data race diagnostics" OFF)
 option(ENABLE_NATIVE_OPTIMIZATIONS "Enable -march=native/-mtune=native for local Release builds" ON)
 option(ENABLE_PACKET_BACKLOG_DIAGNOSTICS "Enable ProtocolGame packet backlog diagnostics" OFF)
+option(ENABLE_OUTPUTMESSAGE_POOL_DIAGNOSTICS "Enable OutputMessage pool counters for profiling" OFF)
 
 option(USE_LUAJIT "Use LuaJIT" OFF)
 if (USE_LUAJIT)
@@ -272,6 +273,10 @@ endif()
 if (ENABLE_PACKET_BACKLOG_DIAGNOSTICS)
     ADD_DEFINITIONS(-DPROTOCOLGAME_BACKLOG_DIAGNOSTICS)
     message(STATUS "ProtocolGame packet backlog diagnostics enabled")
+endif()
+
+if (ENABLE_OUTPUTMESSAGE_POOL_DIAGNOSTICS)
+    ADD_DEFINITIONS(-DOUTPUTMESSAGE_POOL_DIAGNOSTICS)
 endif()
 
 if (BUILD_TESTING OR BUILD_BENCHMARKING)
