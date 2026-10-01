@@ -170,4 +170,21 @@ TEST_CASE(output_fixed_wire_fixture)
 	std::cout << '\n';
 }
 
+#ifdef OUTPUTMESSAGE_POOL_DIAGNOSTICS
+TEST_CASE(output_pool_diagnostics_exclude_incoming_allocations)
+{
+	const auto before = OutputMessagePool::getDiagnostics();
+	auto first = OutputMessagePool::getOutputMessage();
+	auto second = OutputMessagePool::getOutputMessage();
+	auto incoming = tfs::net::make_network_message();
+	const auto active = OutputMessagePool::getDiagnostics();
+	CHECK(active.hits + active.misses == before.hits + before.misses + 2);
+	CHECK(active.inUse == before.inUse + 2);
+	CHECK(active.peakInUse >= active.inUse);
+	first.reset();
+	second.reset();
+	CHECK(OutputMessagePool::getDiagnostics().inUse == before.inUse);
+}
+#endif
+
 TFS_TEST_MAIN()
