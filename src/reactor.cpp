@@ -228,6 +228,7 @@ void TaskReactor::runOnce()
 #endif
 
 	PerformanceScope cycleScope(PerformanceMetric::ReactorCycle);
+	const auto cycleStart = std::chrono::steady_clock::now();
 	std::vector<Task> readyTasks;
 	readyTasks.reserve(128);
 
@@ -241,7 +242,7 @@ void TaskReactor::runOnce()
 	}
 	{
 		PerformanceScope scope(PerformanceMetric::ReactorCallbacks);
-		executeReadyTasks(readyTasks);
+		executeReadyTasks(readyTasks, cycleStart);
 	}
 	{
 		std::scoped_lock lock(mutex);
@@ -402,7 +403,7 @@ bool TaskReactor::retireIdentifier(uint32_t identifier)
 	return cancelledInBatch || cancelledPreviously;
 }
 
-void TaskReactor::executeReadyTasks(std::vector<Task>& readyTasks)
+void TaskReactor::executeReadyTasks(std::vector<Task>& readyTasks, std::chrono::steady_clock::time_point cycleStart)
 {
 	{
 		PerformanceScope scope(PerformanceMetric::ReactorSort);
@@ -414,7 +415,6 @@ void TaskReactor::executeReadyTasks(std::vector<Task>& readyTasks)
 		});
 	}
 
-	const auto cycleStart = std::chrono::steady_clock::now();
 	uint32_t tasksExecuted = 0;
 	std::chrono::steady_clock::duration slowestDuration{};
 	std::optional<size_t> slowestTaskIndex;
