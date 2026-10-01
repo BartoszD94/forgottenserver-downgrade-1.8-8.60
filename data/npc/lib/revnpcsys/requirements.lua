@@ -130,20 +130,21 @@ if not NpcRequirements then
     ---@param item number: The item ID.
     ---@param count number (optional): The amount of the item to remove. Defaults to 1.
     ---@param subType number (optional): The subtype of the item to remove. Defaults to -1.
-    ---@param ignoreEquipped boolean (optional): If true, the item will not be removed even if it is equipped. Defaults to false.
+    ---@param ignoreEquipped boolean (optional): Exclude equipped items from counting and removal. Defaults to true; pass false to allow their removal.
     function NpcRequirements:removeItem(item, count, subType, ignoreEquipped)
         local count = count or 1
         local subType = subType or -1
-        local ignoreEquipped = ignoreEquipped or true
+        local ignoreEquipped = ignoreEquipped ~= false
         self.requireRemoveItem = {{item = item, count = count, subType = subType, ignoreEquipped = ignoreEquipped}}
     end
 
     -- Sets the items to remove for a keyword.
+    -- Entries default ignoreEquipped to true, just like removeItem.
     ---@param table table<number, table>: The table of items to remove.
     function NpcRequirements:removeItems(table)
         self.requireRemoveItem = table
         for k, v in pairs(table) do
-            table[k].ignoreEquipped = table[k].ignoreEquipped or true
+            table[k].ignoreEquipped = table[k].ignoreEquipped ~= false
         end
     end
 
@@ -317,7 +318,7 @@ if not NpcRequirements then
             if self.requireInfight and not player:getCondition(CONDITION_INFIGHT, CONDITIONID_DEFAULT) and not player:getCondition(CONDITION_INFIGHT, CONDITIONID_COMBAT) then
                 return false, MESSAGE_LIST.infight, REQUIREMENTS.inFight
             end
-            if not self.requireInfight and player:getCondition(CONDITION_INFIGHT, CONDITIONID_DEFAULT) and player:getCondition(CONDITION_INFIGHT, CONDITIONID_COMBAT) then
+            if not self.requireInfight and (player:getCondition(CONDITION_INFIGHT, CONDITIONID_DEFAULT) or player:getCondition(CONDITION_INFIGHT, CONDITIONID_COMBAT)) then
                 return false, MESSAGE_LIST.notInfight, REQUIREMENTS.inFight
             end
         end
