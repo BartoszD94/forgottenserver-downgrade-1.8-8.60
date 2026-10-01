@@ -2,7 +2,9 @@
 
 #include "../game.h"
 #include "../item.h"
+#include "../instance_utils.h"
 #include "../outputmessage.h"
+#include "../packet_buffer.h"
 #include "../player.h"
 #include "../protocolgame.h"
 #include "../protocolspectator.h"
@@ -32,7 +34,16 @@ struct ProtocolGameCombatTestAccess
 		p.sendAnimatedText(text, pos, TEXTCOLOR_RED);
 	}
 	static void text(ProtocolGame& p, const std::string& text) { p.sendTextMessage(MESSAGE_STATUS_DEFAULT, text); }
+	static void textObject(ProtocolGame& p, std::string_view text)
+	{
+		p.sendTextMessage(TextMessage(MESSAGE_STATUS_DEFAULT, text));
+	}
 	static void reset(ProtocolGame& p) { p.getCurrentBuffer()->reset(); }
+	static void spyViewport(ProtocolGame& p, const Position& pos)
+	{
+		p.spyActive_ = true;
+		p.spyViewportPos_ = pos;
+	}
 };
 
 namespace {
@@ -74,8 +85,9 @@ Tile* tileAt(const Position& pos, bool ground = true)
 
 struct Fixture
 {
-	ProtocolGame protocol{nullptr};
-	std::shared_ptr<Player> viewer = std::make_shared<Player>(nullptr);
+	ProtocolGame_ptr handle = std::make_shared<ProtocolGame>(nullptr);
+	ProtocolGame& protocol = *handle;
+	std::shared_ptr<Player> viewer = std::make_shared<Player>(handle);
 	std::shared_ptr<PacketCreature> creature = std::make_shared<PacketCreature>();
 	explicit Fixture(bool astra = false)
 	{
@@ -190,6 +202,9 @@ TEST_CASE(combat_texts_keep_encoding_and_per_field_fallback)
 		legacy.addByte(MESSAGE_STATUS_DEFAULT);
 		legacy.addString(text);
 		sameBody(f.protocol, legacy);
+		ProtocolGameCombatTestAccess::reset(f.protocol);
+		ProtocolGameCombatTestAccess::textObject(f.protocol, text);
+		sameBody(f.protocol, legacy);
 	}
 }
 
@@ -213,6 +228,100 @@ TEST_CASE(combat_packet_visibility_and_hidden_health_are_unchanged)
 	f.creature->setHiddenHealth(true);
 	ProtocolGameCombatTestAccess::health(f.protocol, f.creature.get());
 	CHECK(body(f.protocol) == std::vector<uint8_t>({0x8c, 0x78, 0x56, 0x34, 0x12, 0}));
+}
+
+TEST_CASE(packet_buffer_exposes_only_written_bytes_and_rejects_overflow)
+{
+	tfs::net::PacketBuffer<8> packet;
+	CHECK(packet.bytes().empty());
+	packet.addByte(0x83);
+	CHECK(packet.bytes().size() == 1);
+	packet.addPosition(CENTER);
+	packet.add<uint16_t>(1);
+	CHECK(packet.bytes().size() == 8);
+	packet.addByte(0xff);
+	CHECK(packet.bytes().empty()); // Never send a partially serialized overflow.
+}
+
+TEST_CASE(packet_buffer_string_limits_are_encoded_characters_not_utf8_bytes)
+{
+	std::string utf8;
+	for (size_t i = 0; i < NetworkMessage::MAX_STRING_LENGTH; ++i) {
+		utf8 += "\xc3\xa9";
+	}
+	tfs::net::PacketBuffer<2 + NetworkMessage::MAX_STRING_LENGTH> packet;
+	packet.addString(utf8);
+	NetworkMessage legacy;
+	legacy.addString(utf8);
+	CHECK(std::equal(packet.bytes().begin(), packet.bytes().end(), legacy.getBuffer() + 8,
+	                 legacy.getBuffer() + 8 + legacy.getLength()));
+}
+
+TEST_CASE(dense_and_sparse_fanout_keeps_every_visible_same_instance_recipient)
+{
+	for (const bool sparse : {false, true}) {
+		std::vector<std::unique_ptr<Fixture>> viewers;
+		SpectatorVec spectators;
+		for (size_t i = 0; i < 128; ++i) {
+			auto f = std::make_unique<Fixture>(i % 2 != 0);
+			f->viewer->setInstanceID(i % 3 == 0 ? 99 : 42);
+			if (sparse && i % 2 == 0) {
+				f->viewer->setParent(tileAt(Position{1, 1, 7}));
+			}
+			spectators.emplace_back(f->viewer);
+			viewers.push_back(std::move(f));
+		}
+		// Map::getSpectators partitions by type before returning. This explicit
+		// fixture must honor the same contract before using spectators.players().
+		spectators.partitionByType();
+		InstanceUtils::sendMagicEffectToInstance(spectators, CENTER, 1, 42);
+		for (size_t i = 0; i < viewers.size(); ++i) {
+			const bool expected = i % 3 != 0 && (!sparse || i % 2 != 0);
+			CHECK(body(viewers[i]->protocol).empty() != expected);
+			if (expected) {
+				CHECK(body(viewers[i]->protocol) == std::vector<uint8_t>({0x83, 0x34, 0x12, 0x78, 0x56, 7, 1, 0}));
+			}
+		}
+	}
+}
+
+TEST_CASE(combat_fanout_preserves_owner_cast_and_spy_paths)
+{
+	Fixture owner, cast, spy;
+	owner.viewer->client->addSpectator(cast.handle);
+	owner.viewer->client->addSpyClient(spy.handle);
+	spy.viewer->setParent(tileAt(Position{1, 1, 7}));
+	ProtocolGameCombatTestAccess::spyViewport(spy.protocol, CENTER);
+	owner.viewer->sendMagicEffect(CENTER, 511);
+	const auto expected = std::vector<uint8_t>({0x83, 0x34, 0x12, 0x78, 0x56, 7, 0xff, 1});
+	CHECK(body(owner.protocol) == expected);
+	CHECK(body(cast.protocol) == expected);
+	CHECK(body(spy.protocol) == expected);
+}
+
+TEST_CASE(repeated_health_fanout_copies_exact_payload_to_every_observer)
+{
+	Fixture target;
+	target.creature->setMaxHealth(100);
+	std::vector<std::unique_ptr<Fixture>> viewers;
+	SpectatorVec spectators;
+	for (size_t i = 0; i < 128; ++i) {
+		auto f = std::make_unique<Fixture>(i % 2 != 0);
+		spectators.emplace_back(f->viewer);
+		viewers.push_back(std::move(f));
+	}
+	for (const int32_t health : {100, 99, 73, 25, 1, 0, 100}) {
+		target.creature->setHealth(health);
+		g_game.addCreatureHealth(spectators, target.creature.get());
+		NetworkMessage legacy;
+		legacy.addByte(0x8c);
+		legacy.add<uint32_t>(target.creature->getID());
+		legacy.addByte(health);
+		for (auto& f : viewers) {
+			sameBody(f->protocol, legacy);
+			ProtocolGameCombatTestAccess::reset(f->protocol);
+		}
+	}
 }
 
 int main()

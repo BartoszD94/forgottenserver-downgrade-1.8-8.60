@@ -24,6 +24,7 @@
 #include "monster.h"
 #include "monsters.h"
 #include "outputmessage.h"
+#include "packet_buffer.h"
 #include "performance_metrics.h"
 #include "player.h"
 #include "protocollogin.h"
@@ -1368,6 +1369,17 @@ void ProtocolGame::writeToOutputBuffer(const NetworkMessage& msg)
 	}
 	auto out = getOutputBuffer(msg.getLength());
 	out->append(msg);
+}
+
+void ProtocolGame::writeToOutputBuffer(std::span<const uint8_t> bytes)
+{
+	if (bytes.empty()) {
+		return;
+	}
+	PerformanceScope scope(PerformanceMetric::ProtocolOutputAppend);
+	g_performanceMetrics.recordOutputPayload(bytes.front(), bytes.size());
+	auto out = getOutputBuffer(static_cast<int32_t>(bytes.size()));
+	out->append(bytes); // Synchronous copy; headers/crypto remain per recipient.
 }
 
 void ProtocolGame::parsePacket(NetworkMessage& msg)
@@ -3454,23 +3466,23 @@ void ProtocolGame::sendBasicData()
 void ProtocolGame::sendTextMessage(const TextMessage& message)
 {
 	PerformanceScope scope(PerformanceMetric::ProtocolTextMessage);
-	g_performanceMetrics.recordSerializerInitialization(NETWORKMESSAGE_MAXSIZE);
-	NetworkMessage msg;
+	g_performanceMetrics.recordSerializerInitialization(4 + NetworkMessage::MAX_STRING_LENGTH);
+	tfs::net::PacketBuffer<4 + NetworkMessage::MAX_STRING_LENGTH> msg;
 	msg.addByte(0xB4);
 	msg.addByte(message.type);
 	msg.addString(message.text);
-	writeToOutputBuffer(msg);
+	writeToOutputBuffer(msg.bytes());
 }
 
 void ProtocolGame::sendTextMessage(MessageClasses mclass, const std::string& message)
 {
 	PerformanceScope scope(PerformanceMetric::ProtocolTextMessage);
-	g_performanceMetrics.recordSerializerInitialization(NETWORKMESSAGE_MAXSIZE);
-	NetworkMessage msg;
+	g_performanceMetrics.recordSerializerInitialization(4 + NetworkMessage::MAX_STRING_LENGTH);
+	tfs::net::PacketBuffer<4 + NetworkMessage::MAX_STRING_LENGTH> msg;
 	msg.addByte(0xB4);
 	msg.addByte(mclass);
 	msg.addString(message);
-	writeToOutputBuffer(msg);
+	writeToOutputBuffer(msg.bytes());
 }
 
 void ProtocolGame::sendClosePrivate(uint16_t channelId)
@@ -4048,8 +4060,8 @@ void ProtocolGame::sendCreatureTurn(const Creature* creature, uint32_t stackpos)
 		return;
 	}
 
-	g_performanceMetrics.recordSerializerInitialization(NETWORKMESSAGE_MAXSIZE);
-	NetworkMessage msg;
+	g_performanceMetrics.recordSerializerInitialization(14);
+	tfs::net::PacketBuffer<14> msg;
 	msg.addByte(0x6B);
 	msg.addPosition(creature->getPosition());
 	msg.addByte(static_cast<uint8_t>(stackpos));
@@ -4057,7 +4069,7 @@ void ProtocolGame::sendCreatureTurn(const Creature* creature, uint32_t stackpos)
 	msg.add<uint16_t>(0x63);
 	msg.add<uint32_t>(creature->getID());
 	msg.addByte(dir);
-	writeToOutputBuffer(msg);
+	writeToOutputBuffer(msg.bytes());
 }
 
 void ProtocolGame::sendCreatureSay(const Creature* creature, SpeakClasses type, std::string_view text,
@@ -4299,13 +4311,13 @@ ProtocolGame::CustomPongResult ProtocolGame::receiveCustomPong(uint32_t id, int6
 void ProtocolGame::sendDistanceShoot(const Position& from, const Position& to, uint16_t type)
 {
 	PerformanceScope scope(PerformanceMetric::ProtocolDistanceEffect);
-	g_performanceMetrics.recordSerializerInitialization(NETWORKMESSAGE_MAXSIZE);
-	NetworkMessage msg;
+	g_performanceMetrics.recordSerializerInitialization(13);
+	tfs::net::PacketBuffer<13> msg;
 	msg.addByte(0x85);
 	msg.addPosition(from);
 	msg.addPosition(to);
 	msg.add<uint16_t>(type);
-	writeToOutputBuffer(msg);
+	writeToOutputBuffer(msg.bytes());
 }
 
 void ProtocolGame::sendMagicEffect(const Position& pos, uint16_t type)
@@ -4320,19 +4332,19 @@ void ProtocolGame::sendMagicEffect(const Position& pos, uint16_t type)
 		return;
 	}
 
-	g_performanceMetrics.recordSerializerInitialization(NETWORKMESSAGE_MAXSIZE);
-	NetworkMessage msg;
+	g_performanceMetrics.recordSerializerInitialization(8);
+	tfs::net::PacketBuffer<8> msg;
 	msg.addByte(0x83);
 	msg.addPosition(pos);
 	msg.add<uint16_t>(type);
-	writeToOutputBuffer(msg);
+	writeToOutputBuffer(msg.bytes());
 }
 
 void ProtocolGame::sendCreatureHealth(const Creature* creature)
 {
 	PerformanceScope scope(PerformanceMetric::ProtocolCreatureHealth);
-	g_performanceMetrics.recordSerializerInitialization(NETWORKMESSAGE_MAXSIZE);
-	NetworkMessage msg;
+	g_performanceMetrics.recordSerializerInitialization(6);
+	tfs::net::PacketBuffer<6> msg;
 	msg.addByte(0x8C);
 	msg.add<uint32_t>(creature->getID());
 
@@ -4342,7 +4354,7 @@ void ProtocolGame::sendCreatureHealth(const Creature* creature)
 		msg.addByte(std::ceil(
 		    (static_cast<double>(creature->getHealth()) / std::max<int32_t>(creature->getMaxHealth(), 1)) * 100));
 	}
-	writeToOutputBuffer(msg);
+	writeToOutputBuffer(msg.bytes());
 }
 
 void ProtocolGame::sendFYIBox(std::string_view message)
@@ -5958,13 +5970,13 @@ void ProtocolGame::sendAnimatedText(std::string_view message, const Position& po
 		return;
 	}
 
-	g_performanceMetrics.recordSerializerInitialization(NETWORKMESSAGE_MAXSIZE);
-	NetworkMessage msg;
+	g_performanceMetrics.recordSerializerInitialization(9 + NetworkMessage::MAX_STRING_LENGTH);
+	tfs::net::PacketBuffer<9 + NetworkMessage::MAX_STRING_LENGTH> msg;
 	msg.addByte(0x84);
 	msg.addPosition(pos);
 	msg.addByte(color);
 	msg.addString(message);
-	writeToOutputBuffer(msg);
+	writeToOutputBuffer(msg.bytes());
 }
 
 void ProtocolGame::sendSpellCooldown(uint16_t spellId, uint32_t time)
