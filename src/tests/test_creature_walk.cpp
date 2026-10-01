@@ -106,6 +106,19 @@ public:
 
 	uint32_t generation() const { return walkGeneration; }
 	uint32_t eventId() const { return eventWalk; }
+	bool updatingPath() const { return isUpdatingPath; }
+	void goToFollowCreature() override
+	{
+		++followUpdates;
+		lastFollowTarget = getFollowCreatureShared();
+	}
+	void keepRoute()
+	{
+		hasFollowPath = true;
+		listWalkDir = {DIRECTION_EAST, DIRECTION_EAST};
+	}
+	int followUpdates = 0;
+	std::shared_ptr<Creature> lastFollowTarget;
 
 	void onWalk() override
 	{
@@ -454,6 +467,84 @@ TEST_CASE(player_multistep_autowalk_keeps_each_physical_step)
 	CHECK(CreatureWalkTestAccess::eventId(player) == 0);
 	CHECK(world.processedTasks() == 2);
 	CHECK(!g_reactor.hasPendingTasks());
+}
+
+namespace {
+class FollowFixture
+{
+public:
+	FollowFixture()
+	{
+		for (uint16_t x : {951, 952}) {
+			const Position position{x, 950, 7};
+			if (!g_game.map.getTile(position)) {
+				g_game.map.setTile(x, 950, 7, std::make_unique<StaticTile>(x, 950, 7));
+			}
+			auto target = std::make_shared<WalkCreature>();
+			CHECK(g_game.internalPlaceCreature(target.get(), position, false, true));
+			targets.push_back(std::move(target));
+		}
+	}
+	~FollowFixture()
+	{
+		world.creature->setFollowCreature(nullptr);
+		g_reactor.setMaxInboxSize(REACTOR_MAX_INBOX_SIZE);
+		for (const auto& target : targets) {
+			g_game.removeCreature(target.get(), false);
+		}
+	}
+	WalkFixture world;
+	std::vector<std::shared_ptr<WalkCreature>> targets;
+};
+} // namespace
+
+TEST_CASE(follow_request_retries_after_enqueue_rejection)
+{
+	FollowFixture fixture;
+	auto& follower = *fixture.world.creature;
+	g_reactor.setMaxInboxSize(1);
+	CHECK(g_reactor.send([] {}));
+	CHECK(follower.setFollowCreature(fixture.targets[0].get()));
+	CHECK(!follower.updatingPath());
+	g_reactor.runOnce();
+	CHECK(follower.setFollowCreature(fixture.targets[0].get()));
+	CHECK(follower.updatingPath());
+	g_reactor.runOnce();
+	CHECK(follower.followUpdates == 1);
+	CHECK(!follower.updatingPath());
+}
+
+TEST_CASE(follow_requests_deduplicate_and_discard_superseded_targets)
+{
+	FollowFixture fixture;
+	auto& follower = *fixture.world.creature;
+	CHECK(follower.setFollowCreature(fixture.targets[0].get()));
+	CHECK(follower.setFollowCreature(fixture.targets[0].get()));
+	CHECK(follower.setFollowCreature(fixture.targets[1].get()));
+	g_reactor.runOnce();
+	CHECK(follower.followUpdates == 1);
+	CHECK(follower.lastFollowTarget == fixture.targets[1]);
+	CHECK(!follower.updatingPath());
+	CHECK(follower.setFollowCreature(fixture.targets[0].get()));
+	follower.setFollowCreature(nullptr);
+	g_reactor.runOnce();
+	CHECK(follower.followUpdates == 1);
+}
+
+TEST_CASE(follow_successful_step_keeps_remaining_route_but_target_move_refreshes)
+{
+	FollowFixture fixture;
+	auto& follower = *fixture.world.creature;
+	CHECK(follower.setFollowCreature(fixture.targets[0].get()));
+	g_reactor.runOnce();
+	follower.keepRoute();
+	const Tile* tile = follower.getTile();
+	follower.onCreatureMove(&follower, tile, Position{951, 950, 7}, tile, Position{950, 950, 7}, false);
+	CHECK(!follower.updatingPath());
+	follower.onCreatureMove(fixture.targets[0].get(), tile, Position{952, 950, 7}, tile, Position{951, 950, 7}, false);
+	CHECK(follower.updatingPath());
+	g_reactor.runOnce();
+	CHECK(follower.followUpdates == 2);
 }
 
 TFS_TEST_MAIN()
