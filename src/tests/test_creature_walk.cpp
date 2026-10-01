@@ -15,7 +15,7 @@
 #include "../scriptmanager.h"
 #include "../tasks.h"
 #include "../tile.h"
-
+#include "../weapons.h"
 #include "test_support.h"
 
 #include <filesystem>
@@ -83,6 +83,15 @@ struct CreatureWalkTestAccess
 	{
 		player.setNextWalkActionTask(nullptr);
 		player.setNextWalkTask(nullptr);
+		player.stopAttackCheck();
+	}
+	static uint32_t attackEvent(const Player& player) { return player.attackCheckEvent; }
+	static void scheduleAttack(Player& player, uint32_t delay) { player.scheduleAttackCheck(delay); }
+	static void prepareAttack(Player& player, const std::shared_ptr<Creature>& target)
+	{
+		player.vocation = std::make_shared<Vocation>(0);
+		player.attackedCreature = target;
+		player.lastAttack = OTSYS_TIME() - player.getAttackSpeed() - 1;
 	}
 };
 
@@ -545,6 +554,76 @@ TEST_CASE(follow_successful_step_keeps_remaining_route_but_target_move_refreshes
 	CHECK(follower.updatingPath());
 	g_reactor.runOnce();
 	CHECK(follower.followUpdates == 2);
+}
+
+TEST_CASE(player_attack_retries_keep_one_earliest_event_and_cancel_cleanly)
+{
+	PlayerWalkFixture world;
+	auto& player = *world.player;
+	CreatureWalkTestAccess::scheduleAttack(player, 2000);
+	const auto first = CreatureWalkTestAccess::attackEvent(player);
+	CHECK(first != 0);
+	for (int i = 0; i < 100; ++i) {
+		CreatureWalkTestAccess::scheduleAttack(player, 2000);
+	}
+	CHECK(CreatureWalkTestAccess::attackEvent(player) == first);
+	CreatureWalkTestAccess::scheduleAttack(player, 100);
+	const auto earlier = CreatureWalkTestAccess::attackEvent(player);
+	CHECK(earlier != 0 && earlier != first);
+	world.runScheduledTasks();
+	CHECK(CreatureWalkTestAccess::attackEvent(player) == 0);
+	CHECK(world.processedTasks() == 1);
+	CreatureWalkTestAccess::scheduleAttack(player, 100);
+	CHECK(player.setAttackedCreature(nullptr));
+	world.runScheduledTasks();
+	CHECK(CreatureWalkTestAccess::attackEvent(player) == 0);
+	CHECK(world.processedTasks() == 1);
+}
+
+TEST_CASE(player_failed_fist_swings_do_not_multiply_retry_timers)
+{
+	PlayerWalkFixture world;
+	const Position targetPosition{PlayerWalkFixture::start.x + 2, PlayerWalkFixture::start.y, 7};
+	auto target = std::make_shared<WalkCreature>();
+	CHECK(g_game.internalPlaceCreature(target.get(), targetPosition, false, true));
+	Weapons weapons;
+	struct RestoreAttackGlobals
+	{
+		Weapons* previousWeapons = g_weapons;
+		bool previousExhaustion = getBoolean(ConfigManager::ALLOW_AUTO_ATTACK_WITHOUT_EXHAUSTION);
+		~RestoreAttackGlobals()
+		{
+			g_weapons = previousWeapons;
+			ConfigManager::setBoolean(ConfigManager::ALLOW_AUTO_ATTACK_WITHOUT_EXHAUSTION, previousExhaustion);
+		}
+	} restore;
+	g_weapons = &weapons;
+	ConfigManager::setBoolean(ConfigManager::ALLOW_AUTO_ATTACK_WITHOUT_EXHAUSTION, true);
+	auto group = std::make_shared<Group>();
+	group->flags = PlayerFlag_NotGainInFight;
+	world.player->setGroup(group);
+	world.player->setChaseMode(false);
+	CreatureWalkTestAccess::prepareAttack(*world.player, target);
+	world.player->doAttacking(0); // Fist cannot reach a target two tiles away.
+	const auto first = CreatureWalkTestAccess::attackEvent(*world.player);
+	CHECK(first != 0);
+	for (int i = 0; i < 100; ++i) {
+		world.player->doAttacking(0);
+	}
+	CHECK(CreatureWalkTestAccess::attackEvent(*world.player) == first);
+	CHECK(world.player->setAttackedCreature(nullptr));
+	g_game.removeCreature(target.get(), false);
+}
+
+TEST_CASE(player_attack_timer_retries_after_scheduler_rejection)
+{
+	PlayerWalkFixture world;
+	g_scheduler.stop();
+	CreatureWalkTestAccess::scheduleAttack(*world.player, 100);
+	CHECK(CreatureWalkTestAccess::attackEvent(*world.player) == 0);
+	g_scheduler.start();
+	CreatureWalkTestAccess::scheduleAttack(*world.player, 100);
+	CHECK(CreatureWalkTestAccess::attackEvent(*world.player) != 0);
 }
 
 TFS_TEST_MAIN()

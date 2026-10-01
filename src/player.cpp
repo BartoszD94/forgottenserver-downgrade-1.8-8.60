@@ -5667,7 +5667,12 @@ bool Player::setFollowCreature(Creature* creature)
 
 bool Player::setAttackedCreature(Creature* creature)
 {
+	const bool targetChanged = attackedCreature.lock().get() != creature;
+	if (targetChanged || !creature) {
+		stopAttackCheck();
+	}
 	if (!Creature::setAttackedCreature(creature)) {
+		stopAttackCheck();
 		sendCancelTarget();
 		// Stop stamina trainer regeneration if we stop attacking
 		staminaTrainerActive = false;
@@ -5684,13 +5689,56 @@ bool Player::setAttackedCreature(Creature* creature)
 		setFollowCreature(nullptr);
 	}
 
-	if (creature) {
-		g_dispatcher.addTask([id = getID()]() { g_game.checkCreatureAttack(id); });
-	} else {
+	if (creature && targetChanged) {
+		// Refreshing the same target must not start another retry lineage.
+		auto self = std::static_pointer_cast<Player>(weak_from_this().lock());
+		auto target = attackedCreature.lock();
+		g_dispatcher.addTask([weakSelf = std::weak_ptr<Player>(self), weakTarget = std::weak_ptr<Creature>(target)]() {
+			if (auto player = weakSelf.lock(); player && !player->isRemoved() && !player->isDead()) {
+				if (auto target = weakTarget.lock(); target && player->attackedCreature.lock() == target) {
+					player->onAttacking(0);
+				}
+			}
+		});
+	} else if (!creature) {
 		// Stop stamina trainer regeneration if we stop attacking
 		staminaTrainerActive = false;
 	}
 	return true;
+}
+
+void Player::stopAttackCheck()
+{
+	++attackCheckGeneration;
+	if (attackCheckEvent != 0) {
+		g_scheduler.stopEvent(attackCheckEvent);
+		attackCheckEvent = 0;
+	}
+}
+
+void Player::scheduleAttackCheck(uint32_t delay)
+{
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(delay);
+	if (attackCheckEvent != 0 && attackCheckDeadline <= deadline) {
+		return; // Keep the earliest pending retry, including one already ready.
+	}
+	stopAttackCheck();
+	const auto generation = attackCheckGeneration;
+	auto self = std::static_pointer_cast<Player>(weak_from_this().lock());
+	attackCheckDeadline = deadline;
+	attackCheckEvent = g_scheduler.addEvent(createSchedulerTaskWithStats(
+	    delay,
+	    [weakSelf = std::weak_ptr<Player>(self), generation]() {
+		    auto player = weakSelf.lock();
+		    if (!player || player->attackCheckGeneration != generation) {
+			    return;
+		    }
+		    player->attackCheckEvent = 0;
+		    if (!player->isRemoved() && !player->isDead()) {
+			    player->onAttacking(0);
+		    }
+	    },
+	    "Player::attackCheck", TASK_SOURCE_LOCATION));
 }
 
 void Player::goToFollowCreature()
@@ -5746,13 +5794,12 @@ void Player::doAttacking(uint32_t)
 			result = Weapon::useFist(this, ac.get());
 		}
 
-		auto task = createSchedulerTask(std::max<uint32_t>(MIN_TASK_INTERVAL, delay),
-		                                          [id = getID()]() { g_game.checkCreatureAttack(id); });
-
 		if (!classicSpeed && !allowAutoAttackWithoutExhaustion) {
+			auto task = createSchedulerTask(std::max<uint32_t>(MIN_TASK_INTERVAL, delay),
+			                                [id = getID()]() { g_game.checkCreatureAttack(id); });
 			setNextActionTask(std::move(task), false);
 		} else {
-			g_scheduler.addEvent(std::move(task));
+			scheduleAttackCheck(std::max<uint32_t>(MIN_TASK_INTERVAL, delay));
 		}
 
 		if (result) {
@@ -5772,13 +5819,13 @@ void Player::maintainAttackFlow()
 		if ((OTSYS_TIME() - lastAttack) >= getAttackSpeed()) {
 			lastAttack = OTSYS_TIME() - getAttackSpeed() + 100;
 
-			auto task = createSchedulerTask(100, [id = getID()]() { g_game.checkCreatureAttack(id); });
 			bool classicSpeed = getBoolean(ConfigManager::CLASSIC_ATTACK_SPEED);
 
 			if (!classicSpeed && !allowAutoAttackWithoutExhaustion) {
+				auto task = createSchedulerTask(100, [id = getID()]() { g_game.checkCreatureAttack(id); });
 				setNextActionTask(std::move(task), false);
 			} else {
-				g_scheduler.addEvent(std::move(task));
+				scheduleAttackCheck(100);
 			}
 		}
 	}
