@@ -80,6 +80,9 @@ void Item::setTier(uint8_t tier)
 namespace {
 struct ItemRegistry
 {
+	// Threaded login constructs/destroys inventory items outside the dispatcher.
+	// Membership and retirement must share a lock, including lookup readers.
+	std::mutex mutex;
 	std::unordered_set<Item*> items;
 	bool enabled = true;
 };
@@ -88,6 +91,15 @@ ItemRegistry& getItemRegistry()
 {
 	static auto* registry = new ItemRegistry();
 	return *registry;
+}
+
+void registerItem(Item* item)
+{
+	auto& registry = getItemRegistry();
+	std::lock_guard lock(registry.mutex);
+	if (registry.enabled) {
+		registry.items.insert(item);
+	}
 }
 } // namespace
 
@@ -229,12 +241,9 @@ std::shared_ptr<Item> Item::CreateItem(PropStream& propStream)
 	return Item::CreateItem(id, 0);
 }
 
-
 Item::Item(const uint16_t type, uint16_t count /*= 0*/) : id(type)
 {
-	if (auto& registry = getItemRegistry(); registry.enabled) {
-		registry.items.insert(this);
-	}
+	registerItem(this);
 	const ItemType& it = items[id];
 
 	if (it.isFluidContainer() || it.isSplash()) {
@@ -260,11 +269,10 @@ Item::Item(const uint16_t type, uint16_t count /*= 0*/) : id(type)
 	setDefaultDuration();
 }
 
-Item::Item(const Item& i) : Thing(), std::enable_shared_from_this<Item>(), id(i.id), count(i.count), loadedFromMap(i.loadedFromMap)
+Item::Item(const Item& i) :
+    Thing(), std::enable_shared_from_this<Item>(), id(i.id), count(i.count), loadedFromMap(i.loadedFromMap)
 {
-	if (auto& registry = getItemRegistry(); registry.enabled) {
-		registry.items.insert(this);
-	}
+	registerItem(this);
 	if (i.attributes) {
 		attributes = std::make_unique<ItemAttributes>(*i.attributes);
 	}
@@ -272,15 +280,21 @@ Item::Item(const Item& i) : Thing(), std::enable_shared_from_this<Item>(), id(i.
 
 Item::~Item()
 {
-	if (auto& registry = getItemRegistry(); registry.enabled) {
+	auto& registry = getItemRegistry();
+	std::lock_guard lock(registry.mutex);
+	if (registry.enabled) {
 		registry.items.erase(this);
 	}
 }
 
 bool isValidItemPointer(Item* item)
 {
-	const auto& registry = getItemRegistry();
-	return item && registry.enabled && registry.items.count(item) > 0;
+	if (!item) {
+		return false;
+	}
+	auto& registry = getItemRegistry();
+	std::lock_guard lock(registry.mutex);
+	return registry.enabled && registry.items.count(item) > 0;
 }
 
 void Item::clearGlobalRegistry()
@@ -290,6 +304,7 @@ void Item::clearGlobalRegistry()
 	// invalid from here on. The container itself stays alive, so ~Item() calls that
 	// happen after shutdown are still safe.
 	auto& registry = getItemRegistry();
+	std::lock_guard lock(registry.mutex);
 	registry.items.clear();
 	registry.enabled = false;
 }
