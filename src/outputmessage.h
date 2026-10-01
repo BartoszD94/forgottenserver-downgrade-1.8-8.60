@@ -13,7 +13,7 @@
 class OutputMessage : public NetworkMessage
 {
 public:
-	OutputMessage() = default;
+	OutputMessage() noexcept : NetworkMessage(UninitializedBuffer{}) {}
 	~OutputMessage() = default;
 
 	// non-copyable
