@@ -40,7 +40,7 @@ public:
 	{
 		const auto msgLen = msg.getLength();
 
-		if (info.position + msgLen > buffer.size()) [[unlikely]] {
+		if (info.position + msgLen > INITIAL_BUFFER_POSITION + MAX_PROTOCOL_BODY_LENGTH) [[unlikely]] {
 			// In debug, assert fails. In release, behavior is undefined.
 			assert(false && "Buffer overflow in OutputMessage::append");
 			return;
@@ -55,7 +55,7 @@ public:
 	{
 		const auto msgLen = msg->getLength();
 
-		if (info.position + msgLen > buffer.size()) [[unlikely]] {
+		if (info.position + msgLen > INITIAL_BUFFER_POSITION + MAX_PROTOCOL_BODY_LENGTH) [[unlikely]] {
 			assert(false && "Buffer overflow in OutputMessage::append");
 			return;
 		}
@@ -71,7 +71,8 @@ public:
 			return;
 		}
 
-		if (info.position + bytes.size() > buffer.size()) [[unlikely]] {
+		if (bytes.size() > MAX_PROTOCOL_BODY_LENGTH ||
+		    info.position + bytes.size() > INITIAL_BUFFER_POSITION + MAX_PROTOCOL_BODY_LENGTH) [[unlikely]] {
 			assert(false && "Buffer overflow in OutputMessage::append");
 			return;
 		}
