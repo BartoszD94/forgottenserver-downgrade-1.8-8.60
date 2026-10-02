@@ -289,9 +289,13 @@ uint32_t Player::playerAutoID = 0x10000000;
 
 // storedConditionList is now a per-instance member (see player.h)
 
-Player::Player(ProtocolGame_ptr p) : Creature(), client(std::make_shared<ProtocolSpectator>(std::move(p))), lastPing(OTSYS_TIME()), lastPong(lastPing),
-	m_weaponProficiency(std::make_unique<WeaponProficiency>(*this)),
-	storeInbox(std::make_shared<StoreInbox>(ITEM_STORE_INBOX))
+Player::Player(ProtocolGame_ptr p) :
+    Creature(),
+    client(std::make_shared<ProtocolSpectator>(std::move(p))),
+    lastPing(OTSYS_TIME()),
+    lastPong(lastPing),
+    m_weaponProficiency(std::make_unique<WeaponProficiency>(*this)),
+    storeInbox(Item::make<StoreInbox>(ITEM_STORE_INBOX))
 {
 	storeInbox->setParent(this);
 	experienceRate.fill(100);
@@ -2489,7 +2493,7 @@ DepotChest* Player::getDepotChest(uint32_t depotId, bool autoCreate)
 		return nullptr;
 	}
 
-	auto chest = std::make_shared<DepotChest>(ITEM_DEPOT);
+	auto chest = Item::make<DepotChest>(ITEM_DEPOT);
 	DepotChest* rawPtr = chest.get();
 
 	depotChests.emplace(depotId, std::move(chest));
@@ -2506,7 +2510,7 @@ DepotLocker* Player::getDepotLocker(uint32_t depotId)
 		return it->second.get();
 	}
 
-	it = depotLockerMap.emplace(depotId, std::make_shared<DepotLocker>(ITEM_LOCKER)).first;
+	it = depotLockerMap.emplace(depotId, Item::make<DepotLocker>(ITEM_LOCKER)).first;
 	it->second->setDepotId(static_cast<uint16_t>(depotId));
 
 	bool hasMarket = false;
@@ -2577,7 +2581,7 @@ void Player::checkDepotBoxes(DepotChest* chest)
 RewardChest& Player::getRewardChest()
 {
 	if (!rewardChest) {
-		rewardChest = std::make_shared<RewardChest>(ITEM_REWARD_CHEST);
+		rewardChest = Item::make<RewardChest>(ITEM_REWARD_CHEST);
 	}
 	return *rewardChest;
 }

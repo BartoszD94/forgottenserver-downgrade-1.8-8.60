@@ -223,7 +223,7 @@ void ensureWalkTile(const Position& position)
 	}
 	Tile* tile = g_game.map.getTile(position);
 	if (!tile->getGround()) {
-		tile->setGround(std::make_shared<Item>(0));
+		tile->setGround(Item::make<Item>(0));
 	}
 }
 

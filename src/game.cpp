@@ -2873,10 +2873,11 @@ ReturnValue Game::internalAddItem(Cylinder* toCylinder, Item* item, int32_t inde
 ReturnValue Game::internalRemoveItem(Item* item, int32_t count /*= -1*/, bool test /*= false*/, uint32_t flags /*= 0*/,
                                      Creature* actor /*= nullptr*/)
 {
-	extern bool isValidItemPointer(Item*);
-	if (!isValidItemPointer(item)) {
+	const auto itemRef = Item::pin(item);
+	if (!itemRef) {
 		return RETURNVALUE_NOTPOSSIBLE;
 	}
+	item = itemRef.get(); // Hold ownership through queryRemove and all callbacks.
 
 	Cylinder* cylinder = item->getParent();
 	if (cylinder == nullptr) {
@@ -2907,11 +2908,6 @@ ReturnValue Game::internalRemoveItem(Item* item, int32_t count /*= -1*/, bool te
 
 	if (!test) {
 		int32_t index = cylinder->getThingIndex(item);
-
-		auto itemRef = getItemSharedRef(item);
-		if (!itemRef) {
-			return RETURNVALUE_NOTPOSSIBLE;
-		}
 
 		// End an occupied bed session while the BedItem is still attached to its
 		// tile and House. This preserves sleeper regeneration and lets wakeUp()
@@ -3144,6 +3140,11 @@ void Game::addMoney(Cylinder* cylinder, uint64_t money, uint32_t flags /*= 0*/)
 
 Item* Game::transformItem(Item* item, uint16_t newId, int32_t newCount /*= -1*/)
 {
+	const auto itemRef = Item::pin(item);
+	if (!itemRef) {
+		return nullptr;
+	}
+	item = itemRef.get();
 	if (item->getID() == newId && (newCount == -1 || (newCount == item->getSubType() &&
 	                                                  newCount != 0))) { // chargeless item placed on map = infinite
 		return item;
@@ -3170,11 +3171,6 @@ Item* Game::transformItem(Item* item, uint16_t newId, int32_t newCount /*= -1*/)
 
 	const ItemType& newType = Item::items[newId];
 	if (newType.id == 0) {
-		return item;
-	}
-
-	auto itemRef = getItemSharedRef(item);
-	if (!itemRef) {
 		return item;
 	}
 

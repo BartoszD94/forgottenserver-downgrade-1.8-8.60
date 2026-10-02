@@ -11,6 +11,10 @@ request lifecycle fixes, reactor preprocessing budget accounting, item registry
 synchronization, and uninitialized **outgoing** pooled messages with initialized
 crypto padding. None of those changes was repeated.
 
+A subsequent focused [ItemRegistry lifetime correction](ITEM_REGISTRY_LIFETIME_AUDIT.md)
+replaces membership checks with strong ownership pinning. Its validation and
+unmeasured hot-path costs are separate from the CPU measurements below.
+
 The next demonstrable amplification is a temporary `NetworkMessage` initialized
 to 65,500 bytes for each recipient of very small combat packets. The current
 release assembly explicitly called `memset(..., 65500)` while constructing an
