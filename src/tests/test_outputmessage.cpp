@@ -1,7 +1,10 @@
 #include "../otpch.h"
 
+#include "../../tools/xtea/reference.h"
+#include "../const.h"
 #include "../outputmessage.h"
 #include "../protocol.h"
+#include "../xtea_simd.h"
 #include "test_support.h"
 
 namespace {
@@ -23,6 +26,12 @@ public:
 		setRawMessages(raw);
 	}
 	void onRecvFirstMessage(NetworkMessage&) override {}
+	void parsePacket(NetworkMessage& msg) override
+	{
+		received.assign(msg.getBuffer() + msg.getBufferPosition(),
+		                msg.getBuffer() + msg.getBufferPosition() + msg.getLength());
+	}
+	std::vector<uint8_t> received;
 };
 
 template <typename T>
@@ -89,6 +98,73 @@ TEST_CASE(output_headers_checksum_and_padding_ignore_old_storage)
 				CHECK(std::equal(payload.begin(), payload.end(), plain.begin() + 2));
 				CHECK(std::all_of(plain.begin() + 2 + length, plain.end(), [](uint8_t byte) { return byte == 0x33; }));
 			}
+		}
+	}
+}
+
+TEST_CASE(output_and_incoming_crypto_match_frozen_pr318_wire_bytes)
+{
+	std::vector<std::vector<uint8_t>> payloads;
+	for (size_t length : {size_t{1}, size_t{6}, size_t{7}, size_t{8}, size_t{15}, size_t{64}, size_t{8192},
+	                      size_t{NetworkMessage::MAX_PROTOCOL_BODY_LENGTH}}) {
+		std::vector<uint8_t> payload(length);
+		for (size_t i = 0; i < length; ++i) payload[i] = static_cast<uint8_t>(i * 17 + 3);
+		payloads.push_back(std::move(payload));
+	}
+	NetworkMessage combat;
+	combat.addByte(0x8C); // Creature health, production serializer primitives.
+	combat.add<uint32_t>(0x40000001);
+	combat.addByte(75);
+	payloads.emplace_back(combat.getBuffer() + NetworkMessage::INITIAL_BUFFER_POSITION,
+	                      combat.getBuffer() + NetworkMessage::INITIAL_BUFFER_POSITION + combat.getLength());
+	NetworkMessage text;
+	text.addByte(0xB4);
+	text.addByte(MESSAGE_EVENT_ADVANCE);
+	text.addString("You lose 25 hitpoints.");
+	payloads.emplace_back(text.getBuffer() + NetworkMessage::INITIAL_BUFFER_POSITION,
+	                      text.getBuffer() + NetworkMessage::INITIAL_BUFFER_POSITION + text.getLength());
+	for (const auto& payload : payloads) {
+		const size_t length = payload.size();
+		std::vector<uint8_t> crypto(2 + length);
+		const auto innerLength = static_cast<uint16_t>(length);
+		std::memcpy(crypto.data(), &innerLength, 2);
+		std::copy(payload.begin(), payload.end(), crypto.begin() + 2);
+		crypto.resize((crypto.size() + 7) & ~size_t{7}, 0x33);
+		xtea_reference::encrypt(crypto.data(), crypto.size(), xtea_reference::expand_key(TEST_KEY));
+		for (bool checksum : {false, true}) {
+			const size_t header = checksum ? 6 : 2;
+			std::vector<uint8_t> expected(header + crypto.size());
+			const auto outerLength = static_cast<uint16_t>(expected.size() - 2);
+			std::memcpy(expected.data(), &outerLength, 2);
+			if (checksum) {
+				const auto adler = adlerChecksum(crypto.data(), crypto.size());
+				std::memcpy(expected.data() + 2, &adler, 4);
+			}
+			std::copy(crypto.begin(), crypto.end(), expected.begin() + header);
+			auto message = messageWithStorage(0xA5);
+			message->append(payload);
+			TestProtocol protocol(true, checksum);
+			protocol.onSendMessage(message);
+			CHECK(wireBytes(message) == expected);
+		}
+		// Simulate Connection after checksum/header parsing: crypto starts at 6.
+		NetworkMessage incoming;
+		incoming.skipBytes(-2);
+		incoming.setLength(static_cast<uint16_t>(crypto.size() + 6));
+		std::copy(crypto.begin(), crypto.end(), incoming.getBuffer() + 6);
+		TestProtocol receiver(true, true);
+		receiver.onRecvMessage(incoming);
+		CHECK(receiver.received == payload);
+		CHECK(!incoming.isOverrun());
+		for (auto backend : {xtea::Backend::SSE2, xtea::Backend::AVX2}) {
+			if (!xtea::detail::supportsBackend(backend)) continue;
+			std::vector<uint8_t> backendCrypto(2 + length);
+			std::memcpy(backendCrypto.data(), &innerLength, 2);
+			std::copy(payload.begin(), payload.end(), backendCrypto.begin() + 2);
+			backendCrypto.resize((backendCrypto.size() + 7) & ~size_t{7}, 0x33);
+			auto encrypt = backend == xtea::Backend::SSE2 ? xtea::detail::encryptSse2 : xtea::detail::encryptAvx2;
+			encrypt(backendCrypto.data(), backendCrypto.size(), xtea::expand_key(TEST_KEY));
+			CHECK(backendCrypto == crypto);
 		}
 	}
 }

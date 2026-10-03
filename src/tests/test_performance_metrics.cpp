@@ -18,6 +18,14 @@ struct PerformanceMetricsTestAccess
 	static size_t capacity() { return PerformanceMetrics::CallbackSourceCapacity; }
 	static uint64_t sourceSlow(const PerformanceMetrics& m, size_t index) { return m.callbackSources[0].slow[index]; }
 	static uint64_t queueMaximum(const PerformanceMetrics& m) { return m.callbackSources[0].queueMaximum; }
+	static uint64_t cryptoBytes(const PerformanceMetrics& m, PerformanceMetric metric)
+	{
+		return m.metrics[static_cast<size_t>(metric)].bytes.load();
+	}
+	static uint64_t metricCalls(const PerformanceMetrics& m, PerformanceMetric metric)
+	{
+		return m.metrics[static_cast<size_t>(metric)].calls.load();
+	}
 };
 
 TEST_CASE(disabled_diagnostics_do_not_record_work)
@@ -86,6 +94,27 @@ TEST_CASE(diagnostic_counters_accept_concurrent_network_threads)
 		worker.join();
 	}
 	CHECK(PerformanceMetricsTestAccess::work(*metrics, CombatWork::WireBytes) == 32000);
+}
+
+TEST_CASE(xtea_diagnostics_count_calls_and_bytes_only_when_enabled)
+{
+	auto metrics = std::make_unique<PerformanceMetrics>();
+	metrics->record(PerformanceMetric::ProtocolXteaEncrypt, 100, 64);
+	CHECK(PerformanceMetricsTestAccess::cryptoBytes(*metrics, PerformanceMetric::ProtocolXteaEncrypt) == 0);
+	CHECK(PerformanceMetricsTestAccess::metricCalls(*metrics, PerformanceMetric::ProtocolXteaEncrypt) == 0);
+	metrics->setEnabled(true);
+	std::vector<std::jthread> workers;
+	for (int i = 0; i < 4; ++i) workers.emplace_back([&] {
+		for (int n = 0; n < 1000; ++n) {
+			metrics->record(PerformanceMetric::ProtocolXteaEncrypt, 100, 64);
+			metrics->record(PerformanceMetric::ProtocolXteaDecrypt, 200, 32);
+		}
+	});
+	workers.clear();
+	CHECK(PerformanceMetricsTestAccess::cryptoBytes(*metrics, PerformanceMetric::ProtocolXteaEncrypt) == 256000);
+	CHECK(PerformanceMetricsTestAccess::cryptoBytes(*metrics, PerformanceMetric::ProtocolXteaDecrypt) == 128000);
+	CHECK(PerformanceMetricsTestAccess::metricCalls(*metrics, PerformanceMetric::ProtocolXteaEncrypt) == 4000);
+	CHECK(PerformanceMetricsTestAccess::metricCalls(*metrics, PerformanceMetric::ProtocolXteaDecrypt) == 4000);
 }
 
 TFS_TEST_MAIN()

@@ -70,6 +70,9 @@ constexpr std::array<std::string_view, static_cast<size_t>(PerformanceMetric::Co
     "ProtocolGame::sendMoveCreature",
     "ProtocolGame::outputAppend",
     "Protocol::cryptoFrame",
+    "Protocol::xteaEncrypt",
+    "Protocol::xteaDecrypt",
+    "Protocol::cryptoHeader",
     "Connection::enqueue",
 };
 
@@ -174,7 +177,7 @@ void PerformanceMetrics::setEnabled(bool value) noexcept
 	}
 }
 
-void PerformanceMetrics::record(PerformanceMetric metric, uint64_t nanoseconds) noexcept
+void PerformanceMetrics::record(PerformanceMetric metric, uint64_t nanoseconds, uint64_t bytes) noexcept
 {
 	if (!isEnabled()) {
 		return;
@@ -182,6 +185,9 @@ void PerformanceMetrics::record(PerformanceMetric metric, uint64_t nanoseconds) 
 	auto& data = metrics[static_cast<size_t>(metric)];
 	data.calls.fetch_add(1, std::memory_order_relaxed);
 	data.totalNanoseconds.fetch_add(nanoseconds, std::memory_order_relaxed);
+	if (bytes != 0) {
+		data.bytes.fetch_add(bytes, std::memory_order_relaxed);
+	}
 	updateMaximum(data.maximumNanoseconds, nanoseconds);
 	data.histogram[histogramIndex(nanoseconds)].fetch_add(1, std::memory_order_relaxed);
 }
@@ -457,6 +463,7 @@ void PerformanceMetrics::maybeReport()
 		}
 		const uint64_t total = data.totalNanoseconds.exchange(0, std::memory_order_relaxed);
 		const uint64_t maximum = data.maximumNanoseconds.exchange(0, std::memory_order_relaxed);
+		const uint64_t bytes = data.bytes.exchange(0, std::memory_order_relaxed);
 		std::array<uint64_t, HistogramBuckets> histogram{};
 		for (size_t i = 0; i < histogram.size(); ++i) {
 			histogram[i] = data.histogram[i].exchange(0, std::memory_order_relaxed);
@@ -469,6 +476,12 @@ void PerformanceMetrics::maybeReport()
 			total / static_cast<double>(calls) / 1'000.0, maximum / 1'000.0,
 			percentile(histogram, calls, 50) / 1'000.0, percentile(histogram, calls, 95) / 1'000.0,
 			percentile(histogram, calls, 99) / 1'000.0);
+		if (metricIndex == static_cast<size_t>(PerformanceMetric::ProtocolXteaEncrypt) ||
+		    metricIndex == static_cast<size_t>(PerformanceMetric::ProtocolXteaDecrypt)) {
+			report += fmt::format("[Perf] {} bytes={} ns_call={:.3f} ns_byte={:.3f}\n",
+			                      METRIC_NAMES[metricIndex], bytes, total / static_cast<double>(calls),
+			                      bytes ? total / static_cast<double>(bytes) : 0.0);
+		}
 	}
 
 	report += fmt::format(
@@ -669,8 +682,8 @@ void PerformanceMetrics::maybeReport()
 	LOG_INFO("{}", report);
 }
 
-PerformanceScope::PerformanceScope(PerformanceMetric metric, uint64_t* accumulator) noexcept :
-    metric(metric), active(g_performanceMetrics.isEnabled()), accumulator(accumulator)
+PerformanceScope::PerformanceScope(PerformanceMetric metric, uint64_t* accumulator, uint64_t bytes) noexcept :
+    metric(metric), active(g_performanceMetrics.isEnabled()), accumulator(accumulator), bytes(bytes)
 {
 	if (active) {
 		started = std::chrono::steady_clock::now();
@@ -683,7 +696,7 @@ PerformanceScope::~PerformanceScope()
 		const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
 			std::chrono::steady_clock::now() - started).count();
 		const auto nanoseconds = elapsed > 0 ? static_cast<uint64_t>(elapsed) : 0;
-		g_performanceMetrics.record(metric, nanoseconds);
+		g_performanceMetrics.record(metric, nanoseconds, bytes);
 		if (accumulator) {
 			*accumulator += nanoseconds;
 		}

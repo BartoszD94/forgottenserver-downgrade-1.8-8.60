@@ -22,6 +22,7 @@ void XTEA_encrypt(OutputMessage& msg, const xtea::round_keys& key)
 	}
 
 	uint8_t* buffer = msg.getOutputBuffer();
+	PerformanceScope scope(PerformanceMetric::ProtocolXteaEncrypt, nullptr, msg.getLength());
 	xtea::encrypt(buffer, msg.getLength(), key);
 }
 
@@ -32,7 +33,10 @@ bool XTEA_decrypt(NetworkMessage& msg, const xtea::round_keys& key)
 	}
 
 	uint8_t* buffer = msg.getBuffer() + msg.getBufferPosition();
-	xtea::decrypt(buffer, msg.getLength() - 6, key);
+	{
+		PerformanceScope scope(PerformanceMetric::ProtocolXteaDecrypt, nullptr, msg.getLength() - 6);
+		xtea::decrypt(buffer, msg.getLength() - 6, key);
+	}
 
 	uint16_t innerLength = msg.get<uint16_t>();
 	if (innerLength + 8 > msg.getLength()) {
@@ -53,6 +57,7 @@ void Protocol::onSendMessage(const OutputMessage_ptr& msg) const
 
 		if (encryptionEnabled) {
 			XTEA_encrypt(*msg, key);
+			PerformanceScope headerScope(PerformanceMetric::ProtocolCryptoHeader);
 			msg->addCryptoHeader(checksumEnabled);
 		}
 	}

@@ -66,6 +66,9 @@ enum class PerformanceMetric : uint8_t
 	ProtocolCreatureMove,
 	ProtocolOutputAppend,
 	ProtocolCryptoFrame,
+	ProtocolXteaEncrypt,
+	ProtocolXteaDecrypt,
+	ProtocolCryptoHeader,
 	ConnectionEnqueue,
 	Count,
 };
@@ -189,7 +192,7 @@ public:
 		return enabled.load(std::memory_order_relaxed);
 	}
 
-	void record(PerformanceMetric metric, uint64_t nanoseconds) noexcept;
+	void record(PerformanceMetric metric, uint64_t nanoseconds, uint64_t bytes = 0) noexcept;
 
 	void recordQueueSize(size_t current) noexcept;
 	void recordTaskDeferred(uint64_t count = 1) noexcept;
@@ -242,6 +245,7 @@ private:
 		std::atomic<uint64_t> calls{0};
 		std::atomic<uint64_t> totalNanoseconds{0};
 		std::atomic<uint64_t> maximumNanoseconds{0};
+		std::atomic<uint64_t> bytes{0};
 		std::array<std::atomic<uint64_t>, HistogramBuckets> histogram{};
 	};
 
@@ -364,7 +368,7 @@ private:
 class PerformanceScope
 {
 public:
-	explicit PerformanceScope(PerformanceMetric metric, uint64_t* accumulator = nullptr) noexcept;
+	explicit PerformanceScope(PerformanceMetric metric, uint64_t* accumulator = nullptr, uint64_t bytes = 0) noexcept;
 	~PerformanceScope();
 
 	PerformanceScope(const PerformanceScope&) = delete;
@@ -375,6 +379,7 @@ private:
 	std::chrono::steady_clock::time_point started;
 	bool active;
 	uint64_t* accumulator;
+	uint64_t bytes;
 };
 
 extern PerformanceMetrics g_performanceMetrics;

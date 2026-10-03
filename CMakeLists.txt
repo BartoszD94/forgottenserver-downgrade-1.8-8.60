@@ -29,6 +29,7 @@ endif()
 option(ENABLE_ASAN "Enable AddressSanitizer for memory diagnostics" OFF)
 option(ENABLE_TSAN "Enable ThreadSanitizer for data race diagnostics" OFF)
 option(ENABLE_NATIVE_OPTIMIZATIONS "Enable -march=native/-mtune=native for local Release builds" ON)
+option(TFS_XTEA_FORCE_SCALAR "Use baseline scalar XTEA for controlled A/B benchmarks" OFF)
 option(ENABLE_PACKET_BACKLOG_DIAGNOSTICS "Enable ProtocolGame packet backlog diagnostics" OFF)
 option(ENABLE_OUTPUTMESSAGE_POOL_DIAGNOSTICS "Enable OutputMessage pool counters for profiling" OFF)
 
@@ -338,6 +339,7 @@ else ()
 endif ()
 ### END INTERPROCEDURAL OPTIMIZATION ###
 
+include(Xtea)
 add_subdirectory(src)
 
 add_executable(tfs ${tfs_MAIN})
