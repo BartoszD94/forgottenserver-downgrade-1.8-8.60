@@ -5376,7 +5376,7 @@ void ProtocolGame::sendOutfitWindow()
 	msg.addByte(0xC8);
 
 	const bool monkVocationEnabled = ConfigManager::getBoolean(ConfigManager::MONK_VOCATION_ENABLED);
-	const bool isAstra860 = isAstraClient && getVersion() == 860;
+	const bool supportsOutfitStoreMode = (isAstraClient || isFonticakClient) && getVersion() == 860;
 	auto isHiddenOutfit = [monkVocationEnabled](const Outfit* outfit) {
 		return outfit && !monkVocationEnabled && outfit->name == "Monk";
 	};
@@ -5437,7 +5437,7 @@ void ProtocolGame::sendOutfitWindow()
 		uint32_t storeOfferId = 0;
 		if (player->getOutfitAddons(*outfit, addons)) {
 			// available outfit
-		} else if (isAstra860) {
+		} else if (supportsOutfitStoreMode) {
 			const auto* offerInfo = storeCatalog ? storeCatalog->findOutfitByLookType(outfit->lookType) : nullptr;
 			if (!offerInfo) {
 				continue;
@@ -5456,7 +5456,7 @@ void ProtocolGame::sendOutfitWindow()
 		}
 	}
 
-	if (isOTC || isAstra860) {
+	if (isOTC || supportsOutfitStoreMode) {
 		msg.addByte(static_cast<uint8_t>(protocolOutfits.size()));
 	} else {
 		msg.add<uint16_t>(static_cast<uint16_t>(protocolOutfits.size()));
@@ -5466,7 +5466,7 @@ void ProtocolGame::sendOutfitWindow()
 		msg.add<uint16_t>(outfit.lookType);
 		msg.addString(outfit.name);
 		msg.addByte(outfit.addons);
-		if (isAstra860) {
+		if (supportsOutfitStoreMode) {
 			msg.addByte(outfit.mode);
 			if (outfit.mode == 1) {
 				msg.add<uint32_t>(outfit.storeOfferId);
@@ -5474,7 +5474,7 @@ void ProtocolGame::sendOutfitWindow()
 		}
 	}
 
-	if (isOTC || isAstra860 || getVersion() != 861) {
+	if (isOTC || supportsOutfitStoreMode || getVersion() != 861) {
 		std::vector<const Mount*> mounts;
 		for (const auto& [id, mount] : g_game.mounts.getMounts()) {
 			if (player->hasMount(&mount)) {
@@ -5787,6 +5787,14 @@ void ProtocolGame::sendItemInspection(std::shared_ptr<Item> item, uint16_t itemI
 
 	if (!itemType.vocationString.empty()) {
 		descriptions.emplace_back("Professions", itemType.vocationString);
+	}
+
+	if (itemType.charges > 0 || itemType.showCharges) {
+		uint16_t chargeCount = itemType.charges;
+		if (item) {
+			chargeCount = item->getCharges();
+		}
+		descriptions.emplace_back("Charges", std::to_string(chargeCount));
 	}
 
 	descriptions.emplace_back("Tradeable", itemType.isPickupable() ? "yes" : "no");
@@ -6672,6 +6680,7 @@ void ProtocolGame::sendFeatures(bool advertiseAstraItemState)
 	if (isFonticakClient) {
 		features[GameFeature::PlayerFamiliars] = true;
 		features[GameFeature::AstraQuiverCountU16] = true;
+		features[GameFeature::AstraOutfitStoreMode] = true;
 		features[GameFeature::DoubleShopSellAmount] = true;
 	}
 	// Loot highlight container types (OTC GameContainerTypes) — negotiated per client.
@@ -6706,6 +6715,9 @@ void ProtocolGame::sendFeatures(bool advertiseAstraItemState)
 	features[GameFeature::QuickLootFlags] = shouldSendQuickLootFlags();
 	features[GameFeature::ThingUpgradeClassification] = shouldSendThingUpgradeClassification();
 	features[GameFeature::ItemTierByte] = shouldSendItemTierByte();
+	if (getBoolean(ConfigManager::WEAPON_PROFICIENCY_SYSTEM_ENABLED)) {
+		features[GameFeature::Proficiency] = true;
+	}
 
 	if (features.empty()) return;
 

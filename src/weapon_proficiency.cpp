@@ -13,8 +13,46 @@
 #include "tools.h"
 
 #include <cmath>
+#include <fmt/format.h>
+
+#include <array>
 
 namespace {
+
+// Proficiency JSON uses Cipbia bestiary class ids (1 = Amphibic, 11 = Humanoid, ...).
+// Monsters use BESTY_RACE_* from data/lib/core/constants.lua.
+constexpr std::array<uint8_t, 22> PROFICIENCY_BESTIARY_TO_SERVER_RACE = {
+    0,  // unused
+    1,  // Amphibic
+    2,  // Aquatic
+    3,  // Bird
+    4,  // Construct
+    5,  // Demon
+    6,  // Dragon
+    7,  // Elemental
+    9,  // Fey
+    10, // Giant
+    11, // Human
+    12, // Humanoid
+    14, // Lycanthrope
+    15, // Magical
+    16, // Mammal
+    17, // Plant
+    18, // Reptile
+    19, // Slime
+    20, // Undead
+    21, // Vermin
+    8,  // Extra Dimensional
+    13, // Inkborn
+};
+
+uint8_t proficiencyBestiaryIdToServerRace(uint16_t proficiencyBestiaryId)
+{
+	if (proficiencyBestiaryId >= PROFICIENCY_BESTIARY_TO_SERVER_RACE.size()) {
+		return 0;
+	}
+	return PROFICIENCY_BESTIARY_TO_SERVER_RACE[proficiencyBestiaryId];
+}
 
 int32_t saturatingAddWeapon(int32_t value, int64_t increase)
 {
@@ -460,7 +498,7 @@ void WeaponProficiency::applyElementCritical(CombatDamage& damage) const
 
 void WeaponProficiency::applyBestiaryDamage(CombatDamage& damage, const std::shared_ptr<Monster>& monster) const
 {
-	if (!monster) {
+	if (!monster || m_bestiaryDamage.empty()) {
 		return;
 	}
 
@@ -469,9 +507,22 @@ void WeaponProficiency::applyBestiaryDamage(CombatDamage& damage, const std::sha
 		return;
 	}
 
-	auto it = m_bestiaryDamage.find(static_cast<uint16_t>(mType->raceId));
-	if (it != m_bestiaryDamage.end() && it->second > 0) {
-		applyDamageMultiplier(damage, it->second);
+	if (mType->bestiaryClass == 0) {
+		return;
+	}
+
+	double_t totalBonus = 0;
+	for (const auto& [proficiencyBestiaryId, bonus] : m_bestiaryDamage) {
+		if (bonus <= 0) {
+			continue;
+		}
+		if (proficiencyBestiaryIdToServerRace(proficiencyBestiaryId) == mType->bestiaryClass) {
+			totalBonus += bonus;
+		}
+	}
+
+	if (totalBonus > 0) {
+		applyDamageMultiplier(damage, totalBonus);
 	}
 }
 
@@ -602,12 +653,28 @@ void WeaponProficiency::applyOn(WeaponProficiencyHealth_t healthType, WeaponProf
 	if (healthType == LIFE) {
 		value = getStat(gainType == HIT ? LIFE_GAIN_ON_HIT : LIFE_GAIN_ON_KILL);
 		if (value > 0) {
-			m_player.gainHealth(nullptr, static_cast<int32_t>(std::llround(value)));
+			const int32_t amount = static_cast<int32_t>(std::llround(value));
+			const int32_t healthBefore = m_player.getHealth();
+			m_player.gainHealth(nullptr, amount);
+			const int32_t realGain = m_player.getHealth() - healthBefore;
+			if (realGain > 0 && !m_player.isInGhostMode()) {
+				g_game.addAnimatedText(fmt::format("{:d}", realGain), m_player.getPosition(),
+				                       static_cast<TextColor_t>(getInteger(ConfigManager::HEALTH_GAIN_COLOUR)),
+				                       m_player.getInstanceID());
+			}
 		}
 	} else if (healthType == MANA) {
 		value = getStat(gainType == HIT ? MANA_GAIN_ON_HIT : MANA_GAIN_ON_KILL);
 		if (value > 0) {
-			m_player.changeMana(static_cast<int32_t>(std::llround(value)));
+			const int32_t amount = static_cast<int32_t>(std::llround(value));
+			const int32_t manaBefore = m_player.getMana();
+			m_player.changeMana(amount);
+			const int32_t realGain = m_player.getMana() - manaBefore;
+			if (realGain > 0 && !m_player.isInGhostMode()) {
+				g_game.addAnimatedText(fmt::format("{:d}", realGain), m_player.getPosition(),
+				                       static_cast<TextColor_t>(getInteger(ConfigManager::MANA_GAIN_COLOUR)),
+				                       m_player.getInstanceID());
+			}
 		}
 	}
 }
