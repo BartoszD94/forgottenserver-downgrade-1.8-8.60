@@ -454,6 +454,61 @@ TEST_CASE(failure_at_each_write_rolls_back_house_owner_and_inbox_together)
 	}
 }
 
+// Unlike dispatch(), keeps running until the test itself stops the reactor, so
+// asynchronous save completions from workers can still be delivered.
+template <typename Function>
+void dispatchUntilStopped(Function function)
+{
+	g_dispatcher.start();
+	g_scheduler.start();
+	std::exception_ptr error;
+	bool timedOut = false;
+	g_dispatcher.addTask([&] {
+		try {
+			function();
+		} catch (...) {
+			error = std::current_exception();
+			g_reactor.shutdown();
+		}
+	});
+	g_scheduler.addEvent(10000, [&] {
+		timedOut = true;
+		g_reactor.shutdown();
+	});
+	g_reactor.runLoop();
+	g_scheduler.shutdown();
+	g_dispatcher.shutdown();
+	if (error) std::rethrow_exception(error);
+	CHECK(!timedOut);
+}
+
+// A transient failure while saving an online player must not block that player
+// for the rest of the session. The live Player supersedes the failed chain: the
+// next save takes a higher generation and replaces the stale journal row.
+TEST_CASE(failed_save_of_online_player_does_not_block_later_saves)
+{
+	World world;
+	bool retried = false;
+	sql("CREATE TRIGGER fail_online_save BEFORE UPDATE ON players FOR EACH ROW "
+	    "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='injected online save failure'");
+	dispatchUntilStopped([&] {
+		world.online();
+		CHECK(g_saveManager.savePlayer(world.owner.get()) == SaveResult::Queued);
+		g_saveManager.drainPlayerFlushAsync(7, [&](bool drained) {
+			CHECK(!drained);
+			CHECK(!g_saveManager.hasFailedRecovery(7));
+			CHECK(db().executeQuery("DROP TRIGGER fail_online_save"));
+			CHECK(g_saveManager.savePlayerSync(world.owner.get()) == SaveResult::Persisted);
+			retried = true;
+			g_reactor.shutdown();
+		});
+	});
+	db().executeQuery("DROP TRIGGER IF EXISTS fail_online_save");
+	CHECK(retried);
+	CHECK(number("SELECT COUNT(*) AS value FROM player_save_journal WHERE guid=7") == 0);
+	CHECK(number("SELECT save_generation AS value FROM players WHERE id=7") == world.owner->getSaveGeneration());
+}
+
 TEST_CASE(pending_old_save_and_wrong_recipient_cannot_remove_source_items)
 {
 	World world;
