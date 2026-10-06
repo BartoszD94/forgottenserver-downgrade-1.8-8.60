@@ -241,6 +241,7 @@ static bool isValidSqlIdentifier(std::string_view identifier)
 static void logQueryError(tfs::detail::Mysql_ptr& handle, std::string_view query)
 {
 	LOG_ERROR(fmt::format("[Error - mysql_real_query] Query: {}\nMessage: {}", query.substr(0, 256), mysql_error(handle.get())));
+	std::fprintf(stderr, "[DBG-SQL] %s | %.300s\n", mysql_error(handle.get()), std::string(query).c_str());
 }
 
 // Single-attempt query execution. Reconnect/retry is handled by the Database member methods.

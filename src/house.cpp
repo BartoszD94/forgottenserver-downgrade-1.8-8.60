@@ -126,6 +126,7 @@ bool House::updateOwnerInDatabase(uint32_t guid_guild, bool resetProtection)
 		// Also persist empty houses: a previous tile checkpoint must not survive
 		// an ownership change just because there are no current depot moves.
 		const auto image = IOMapSerialize::buildHouseSave(this, {});
+		std::fprintf(stderr, "[DBG] updateOwnerInDatabase image=%d\n", (int)!!image);
 		if (!image) return false;
 		return g_saveManager.commitTransfer(
 		    fmt::format("SELECT `owner` AS `receipt` FROM `houses` WHERE `id` = {} FOR UPDATE", id), owner, guid_guild,
@@ -151,6 +152,7 @@ bool House::setOwner(uint32_t guid_guild, bool updateDatabase /* = true*/, Playe
                      const std::vector<Player*>& participants)
 {
 	if (ownerTransitionInProgress || g_saveManager.isPersistenceBlocked()) {
+		std::fprintf(stderr, "[DBG] setOwner early: transition=%d blocked=%d\n", (int)ownerTransitionInProgress, (int)g_saveManager.isPersistenceBlocked());
 		return false;
 	}
 	if (isLoaded && owner == guid_guild) {
@@ -178,6 +180,7 @@ bool House::setOwner(uint32_t guid_guild, bool updateDatabase /* = true*/, Playe
 	// Do this before owner SQL, depot moves, kicks or access-list changes.
 	// A failed offline load/save must preserve every occupied sleep session.
 	if (owner != 0 && updateDatabase && !BedItem::wakeUpAll(getBeds())) {
+		std::fprintf(stderr, "[DBG] %s:%d\n", __func__, __LINE__);
 		return false;
 	}
 	std::function<void()> notifyTransfer;
@@ -185,6 +188,7 @@ bool House::setOwner(uint32_t guid_guild, bool updateDatabase /* = true*/, Playe
 		const bool resetProtection = (guid_guild == 0 || owner == 0);
 		if (!(owner ? transferToDepot(guid_guild, resetProtection, previousPlayer, notifyTransfer, participants)
 		            : updateOwnerInDatabase(guid_guild, resetProtection))) {
+			std::fprintf(stderr, "[DBG] %s:%d\n", __func__, __LINE__);
 			return false;
 		}
 		if (resetProtection) {
@@ -486,18 +490,25 @@ bool House::transferToDepot(uint32_t newOwner, bool resetProtection, Player* pre
 	const auto online = g_game.getPlayerByGUID(recipientGuid);
 	Player offline(nullptr);
 	Player* player = online ? online.get() : previousPlayer;
+	std::fprintf(stderr, "[DBG] transferToDepot guid=%u online=%d prev=%d moves=%zu participants=%zu\n", recipientGuid, (int)!!online, (int)!!previousPlayer, moves.size(), participants.size());
 	if (!player) {
 		if (!IOLoginData::loadPlayerById(&offline, recipientGuid)) {
 			// Retain orphaned items on their tiles; never treat a broken existing
 			// player load (or a database error) as proof that the owner was deleted.
 			const auto row = Database::getInstance().storeQuery(
 			    fmt::format("SELECT COUNT(*) AS `count` FROM `players` WHERE `id` = {}", recipientGuid));
-			return row && row->getNumber<uint32_t>("count") == 0 && keepItems();
+			std::fprintf(stderr, "[DBG] deleted-owner: row=%d count=%u\n", (int)!!row, row ? row->getNumber<uint32_t>("count") : 9999u);
+			const bool kept = row && row->getNumber<uint32_t>("count") == 0 && keepItems();
+			std::fprintf(stderr, "[DBG] deleted-owner keepItems result=%d\n", (int)kept);
+			return kept;
 		}
 		player = &offline;
+		std::fprintf(stderr, "[DBG] loaded offline owner guid=%u\n", recipientGuid);
 	}
-	if (g_saveManager.hasPendingPlayerSave(recipientGuid) || g_saveManager.hasFailedRecovery(recipientGuid))
+	if (g_saveManager.hasPendingPlayerSave(recipientGuid) || g_saveManager.hasFailedRecovery(recipientGuid)) {
+		std::fprintf(stderr, "[DBG] pending=%d failed=%d\n", (int)g_saveManager.hasPendingPlayerSave(recipientGuid), (int)g_saveManager.hasFailedRecovery(recipientGuid));
 		return false;
+	}
 	if (townId == 0 && !moves.empty()) return false;
 	Inbox* inbox = player->getInbox(townId);
 	if ((!inbox && !moves.empty()) || !player->getSaveFlag()) return false;

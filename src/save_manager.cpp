@@ -246,7 +246,10 @@ bool SaveManager::commitTransfer(std::string_view receiptQuery, uint64_t expecte
                                  const std::function<bool()>& apply)
 {
 	Database& db = Database::getInstance();
-	if (!g_dispatcher.isDispatcherThread() || !accepting || db.isInTransaction()) return false;
+	if (!g_dispatcher.isDispatcherThread() || !accepting || db.isInTransaction()) {
+		std::fprintf(stderr, "[DBG] commitTransfer early: dispatcher=%d accepting=%d inTx=%d\n", (int)g_dispatcher.isDispatcherThread(), (int)accepting, (int)db.isInTransaction());
+		return false;
+	}
 	const auto blockPersistence = [&] {
 		// Never let a lost COMMIT reply turn into a rollback of the live world.
 		persistenceBlocked = true;
@@ -264,10 +267,16 @@ bool SaveManager::commitTransfer(std::string_view receiptQuery, uint64_t expecte
 			const auto row = db.storeQuery(receiptQuery);
 			// A stale Player must not let applyPlayerSave skip the inbox credit
 			// while still committing removal of its source house items.
-			if (!row || row->getNumber<uint64_t>("receipt") != expected) return false;
+			if (!row || row->getNumber<uint64_t>("receipt") != expected) {
+				std::fprintf(stderr, "[DBG] commitTransfer receipt row=%d receipt=%llu expected=%llu\n", (int)!!row, row ? (unsigned long long)row->getNumber<uint64_t>("receipt") : 0ull, (unsigned long long)expected);
+				return false;
+			}
 			if (apply()) {
 				commitAttempted = true;
 				if (transaction.commit()) return true;
+				std::fprintf(stderr, "[DBG] commitTransfer commit failed\n");
+			} else {
+				std::fprintf(stderr, "[DBG] commitTransfer apply failed\n");
 			}
 			retryable = db.lastQueryWasDeadlock();
 			if (!transaction.rollback() && !commitAttempted) {
