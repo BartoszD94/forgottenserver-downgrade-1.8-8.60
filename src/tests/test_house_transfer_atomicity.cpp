@@ -554,6 +554,26 @@ TEST_CASE(deleted_house_owner_releases_ownership_without_moving_items)
 	});
 }
 
+// Migration 13 drops `ondelete_players` and asks admins to recreate it by hand,
+// so production databases exist both with and without it. Without the trigger
+// houses.owner still holds the deleted GUID, and the release must work too.
+TEST_CASE(deleted_house_owner_without_delete_trigger_releases_ownership)
+{
+	World world;
+	sql("DROP TRIGGER IF EXISTS ondelete_players");
+	sql("DELETE FROM players WHERE id=7");
+	CHECK(number("SELECT owner AS value FROM houses WHERE id=701") == 7);
+	bool released = false;
+	dispatch([&] {
+		released = world.house->setOwner(0);
+		CHECK(world.house->getOwner() == 0 && world.root->getParent() == world.tile.get());
+		CHECK(number("SELECT owner AS value FROM houses WHERE id=701") == 0);
+	});
+	sql("CREATE TRIGGER ondelete_players BEFORE DELETE ON players FOR EACH ROW "
+	    "UPDATE houses SET owner = 0 WHERE owner = OLD.id");
+	CHECK(released);
+}
+
 TEST_CASE(missing_guild_releases_ownership_without_moving_items)
 {
 	World world;
