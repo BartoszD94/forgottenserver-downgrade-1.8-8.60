@@ -1,5 +1,6 @@
 # Anti-Rollback GDB Configuration
-# On crash: prints full backtrace, saves all players at temple, then exits.
+# On crash: prints a full backtrace, attempts a dispatcher-owned save, then exits.
+# Existing durable journals remain the reliable recovery source after a fatal crash.
 # Usage: gdb --batch -return-child-result --command=gdb_config --args ./tfs
 
 set $_exitcode = 999
@@ -23,8 +24,12 @@ if $_exitcode == 999
     thread apply all bt full
 
     printf "\n--- Emergency Save (Anti-Rollback) ---\n"
-    call (void)saveServer()
-    printf "Anti-rollback save completed. Players sent to temple.\n"
+    set $_saveaccepted = (bool)saveServer()
+    if $_saveaccepted
+        printf "Emergency save requested. Only the server's durable-completion log confirms persistence.\n"
+    else
+        printf "Emergency save rejected. Preserve and recover existing durable journals on restart.\n"
+    end
     printf "=== END CRASH REPORT ===\n\n"
     quit $_crashcode
 end
