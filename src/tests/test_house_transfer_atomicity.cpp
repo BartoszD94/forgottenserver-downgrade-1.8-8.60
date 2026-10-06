@@ -454,8 +454,11 @@ TEST_CASE(failure_at_each_write_rolls_back_house_owner_and_inbox_together)
 	}
 }
 
-// Unlike dispatch(), keeps running until the test itself stops the reactor, so
-// asynchronous save completions from workers can still be delivered.
+// Unlike dispatch(), keeps running until the test calls stop(), so asynchronous
+// save completions from workers can still be delivered. stop() cancels the
+// timeout guard first: timers outlive runLoop() in the shared reactor, and the
+// reactor ignores cancellation once it has stopped, so a guard left behind would
+// fire during a later test and write through a dangling reference.
 template <typename Function>
 void dispatchUntilStopped(Function function)
 {
@@ -463,17 +466,23 @@ void dispatchUntilStopped(Function function)
 	g_scheduler.start();
 	std::exception_ptr error;
 	bool timedOut = false;
-	g_dispatcher.addTask([&] {
-		try {
-			function();
-		} catch (...) {
-			error = std::current_exception();
-			g_reactor.shutdown();
-		}
-	});
-	g_scheduler.addEvent(10000, [&] {
+	uint32_t guard = 0;
+	const auto stop = [&guard] {
+		g_scheduler.stopEvent(std::exchange(guard, 0));
+		g_reactor.shutdown();
+	};
+	guard = g_scheduler.addEvent(10000, [&] {
+		guard = 0;
 		timedOut = true;
 		g_reactor.shutdown();
+	});
+	g_dispatcher.addTask([&] {
+		try {
+			function(stop);
+		} catch (...) {
+			error = std::current_exception();
+			stop();
+		}
 	});
 	g_reactor.runLoop();
 	g_scheduler.shutdown();
@@ -491,16 +500,16 @@ TEST_CASE(failed_save_of_online_player_does_not_block_later_saves)
 	bool retried = false;
 	sql("CREATE TRIGGER fail_online_save BEFORE UPDATE ON players FOR EACH ROW "
 	    "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='injected online save failure'");
-	dispatchUntilStopped([&] {
+	dispatchUntilStopped([&](const auto& stop) {
 		world.online();
 		CHECK(g_saveManager.savePlayer(world.owner.get()) == SaveResult::Queued);
-		g_saveManager.drainPlayerFlushAsync(7, [&](bool drained) {
+		g_saveManager.drainPlayerFlushAsync(7, [&, stop](bool drained) {
 			CHECK(!drained);
 			CHECK(!g_saveManager.hasFailedRecovery(7));
 			CHECK(db().executeQuery("DROP TRIGGER fail_online_save"));
 			CHECK(g_saveManager.savePlayerSync(world.owner.get()) == SaveResult::Persisted);
 			retried = true;
-			g_reactor.shutdown();
+			stop();
 		});
 	});
 	db().executeQuery("DROP TRIGGER IF EXISTS fail_online_save");
