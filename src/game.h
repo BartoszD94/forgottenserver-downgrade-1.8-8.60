@@ -512,6 +512,8 @@ public:
 	void setGameState(GameState_t newState);
 	// Returns request acceptance, not durable completion. Callback runs on dispatcher.
 	bool saveGameState(bool crash = false, std::function<void(bool)> completion = {});
+	// Debugger-only terminal save: an off-dispatcher caller waits for durable completion.
+	bool saveCrashStateAndWait(uint32_t timeoutMs = 30000);
 
 	// Events
 	void checkCreatureWalk(uint32_t creatureId, uint32_t walkGeneration);

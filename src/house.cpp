@@ -448,13 +448,37 @@ bool House::transferToDepot(uint32_t newOwner, bool resetProtection, Player* pre
 	}
 	// No recipient is needed for an empty house (including houses without a town).
 	if (moves.empty() && participants.empty()) return updateOwnerInDatabase(newOwner, resetProtection);
-	if ((townId == 0 && !moves.empty()) || !g_dispatcher.isDispatcherThread()) return false;
+	if (!g_dispatcher.isDispatcherThread()) return false;
+	const auto keepItems = [&] {
+		if (participants.empty()) return updateOwnerInDatabase(newOwner, resetProtection);
+		const auto image = IOMapSerialize::buildHouseSave(this, {});
+		if (!image) return false;
+		return g_saveManager.savePlayerTransfer(
+		    participants.front(), {},
+		    [&] {
+			    Database& db = Database::getInstance();
+			    const auto row =
+			        db.storeQuery(fmt::format("SELECT `owner` FROM `houses` WHERE `id` = {} FOR UPDATE", id));
+			    if (!row || row->getNumber<uint32_t>("owner") != owner) return false;
+			    for (const auto& query : *image)
+				    if (!db.executeQuery(query)) return false;
+			    return updateOwnerInDatabase(newOwner, resetProtection) &&
+			           db.executeQuery(fmt::format("DELETE FROM `house_lists` WHERE `house_id` = {}", id)) &&
+			           db.executeQuery(fmt::format("DELETE FROM `house_guests` WHERE `house_id` = {}", id));
+		    },
+		    participants);
+	};
 
 	uint32_t recipientGuid = owner;
 	if (type == HOUSE_TYPE_GUILDHALL) {
 		auto guild = g_game.getGuild(owner);
 		if (!guild) guild = IOGuild::loadGuild(owner);
-		if (!guild) return false;
+		if (!guild) {
+			// COUNT distinguishes a deleted guild from a failed load/query.
+			const auto row = Database::getInstance().storeQuery(
+			    fmt::format("SELECT COUNT(*) AS `count` FROM `guilds` WHERE `id` = {}", owner));
+			return row && row->getNumber<uint32_t>("count") == 0 && keepItems();
+		}
 		recipientGuid = guild->getOwnerGUID();
 	}
 	// Never credit an arbitrary Player supplied by a caller.
@@ -463,11 +487,18 @@ bool House::transferToDepot(uint32_t newOwner, bool resetProtection, Player* pre
 	Player offline(nullptr);
 	Player* player = online ? online.get() : previousPlayer;
 	if (!player) {
-		if (!IOLoginData::loadPlayerById(&offline, recipientGuid)) return false;
+		if (!IOLoginData::loadPlayerById(&offline, recipientGuid)) {
+			// Retain orphaned items on their tiles; never treat a broken existing
+			// player load (or a database error) as proof that the owner was deleted.
+			const auto row = Database::getInstance().storeQuery(
+			    fmt::format("SELECT COUNT(*) AS `count` FROM `players` WHERE `id` = {}", recipientGuid));
+			return row && row->getNumber<uint32_t>("count") == 0 && keepItems();
+		}
 		player = &offline;
 	}
 	if (g_saveManager.hasPendingPlayerSave(recipientGuid) || g_saveManager.hasFailedRecovery(recipientGuid))
 		return false;
+	if (townId == 0 && !moves.empty()) return false;
 	Inbox* inbox = player->getInbox(townId);
 	if ((!inbox && !moves.empty()) || !player->getSaveFlag()) return false;
 

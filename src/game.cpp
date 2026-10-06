@@ -45,6 +45,8 @@
 #include "luascript.h"
 #include "save_manager.h"
 
+#include <future>
+
 extern Vocations g_vocations;
 extern Monsters g_monsters;
 extern LuaEnvironment g_luaEnvironment;
@@ -1128,6 +1130,31 @@ bool Game::saveGameState(bool crash, std::function<void(bool)> completion)
 		if (gameState == GAME_STATE_MAINTAIN) setGameState(GAME_STATE_NORMAL);
 		if (completion) completion(success);
 	});
+}
+
+bool Game::saveCrashStateAndWait(uint32_t timeoutMs)
+{
+	// Blocking the dispatcher would strand worker acknowledgements and any
+	// pending save chains. A crash on that thread must recover existing WAL.
+	if (g_dispatcher.isDispatcherThread()) {
+		LOG_ERROR("[Anti-Rollback] Cannot wait for an emergency save on the dispatcher; preserve existing journals.");
+		return false;
+	}
+	auto completion = std::make_shared<std::promise<bool>>();
+	auto result = completion->get_future();
+	if (!g_dispatcher.addTask([this, completion] {
+		    saveGameState(true, [completion](bool saved) {
+			    // Includes offline/logout chains not tracked by this global generation.
+			    g_saveManager.shutdownAsync(
+			        [completion, saved](bool drained) { completion->set_value(saved && drained); });
+		    });
+	    }))
+		return false;
+	if (result.wait_for(std::chrono::milliseconds(timeoutMs)) != std::future_status::ready) {
+		LOG_ERROR("[Anti-Rollback] Emergency save did not complete before its deadline; preserve existing journals.");
+		return false;
+	}
+	return result.get();
 }
 
 bool Game::loadMainMap(std::string_view filename)

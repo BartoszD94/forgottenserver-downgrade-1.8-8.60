@@ -97,6 +97,8 @@ private:
 	uint64_t saveGenerationId = 0;
 	int64_t saveStartedMs = 0;
 	bool generationSucceeded = true;
+	// Startup recovery gates logins; only runtime durability failures block shutdown.
+	bool sessionSaveFailed = false;
 	bool saveAgain = false;
 	bool accepting = true;
 	bool persistenceBlocked = false;

@@ -41,6 +41,7 @@ struct SaveManagerTestAccess
 		if (completion) manager.saveCallbacks.push_back(std::move(completion));
 	}
 	static void complete(SaveManager& manager) { manager.completeTrackedFlush(true); }
+	static void blockPersistence(SaveManager& manager) { manager.persistenceBlocked = true; }
 };
 
 namespace {
@@ -194,12 +195,40 @@ TEST_CASE(failed_sync_transfer_does_not_leave_an_automatically_replayable_snapsh
 		g_reactor.shutdown();
 	});
 	sql("DROP TRIGGER `fail_sync_player_update`");
-	CHECK(manager.hasFailedRecovery(7));
+	CHECK(!manager.hasFailedRecovery(7));
 	CHECK(number("SELECT `save_generation` AS `value` FROM `players` WHERE `id`=7") == 0);
 	CHECK(number("SELECT COUNT(*) AS `value` FROM `player_save_journal`") == 0);
 	SaveManager restarted;
 	CHECK(restarted.recoverPendingFlushes());
 	CHECK(number("SELECT `save_generation` AS `value` FROM `players` WHERE `id`=7") == 0);
+	dispatch([&] {
+		CHECK(manager.savePlayerSync(&player) == SaveResult::Persisted);
+		manager.shutdownAsync([&](bool success) {
+			CHECK(success);
+			g_reactor.shutdown();
+		});
+	});
+	CHECK(player.getSaveGeneration() == 2 && !manager.hasFailedRecovery(7));
+}
+
+TEST_CASE(failed_logout_commit_retains_its_journal_and_blocks_shutdown)
+{
+	reset();
+	SaveManager manager;
+	Player player(nullptr);
+	player.setGUID(7);
+	player.setSaveFlag(false);
+	sql("CREATE TRIGGER fail_logout_update BEFORE UPDATE ON players FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='injected logout failure'");
+	dispatch([&] {
+		CHECK(manager.savePlayerSync(&player, true) == SaveResult::Failed);
+		CHECK(manager.hasFailedRecovery(7));
+		manager.shutdownAsync([&](bool success) {
+			CHECK(!success);
+			g_reactor.shutdown();
+		});
+	});
+	sql("DROP TRIGGER fail_logout_update");
+	CHECK(number("SELECT COUNT(*) AS value FROM player_save_journal") == 1);
 }
 
 TEST_CASE(logout_contract_queues_durable_snapshot_but_sync_api_does_not)
@@ -303,6 +332,30 @@ TEST_CASE(missing_player_row_keeps_unresolved_journal_blocked)
 	CHECK(manager.recoverPendingFlushes());
 	CHECK(manager.hasFailedRecovery(7));
 	CHECK(number("SELECT COUNT(*) AS `value` FROM `player_save_journal`") == 1);
+}
+
+TEST_CASE(startup_recovery_login_gate_does_not_block_healthy_session_shutdown)
+{
+	reset();
+	sql("INSERT INTO player_save_async_pending VALUES (7,0,'legacy evidence',0)");
+	sql("INSERT INTO players (id) VALUES (8)");
+	SaveManager manager;
+	CHECK(manager.recoverPendingFlushes() && manager.hasFailedRecovery(7));
+	Player healthy(nullptr), blocked(nullptr);
+	healthy.setGUID(8);
+	healthy.setSaveFlag(false);
+	blocked.setGUID(7);
+	blocked.setSaveFlag(false);
+	dispatch([&] {
+		CHECK(manager.savePlayerSync(&blocked) == SaveResult::Failed);
+		CHECK(manager.savePlayerSync(&healthy) == SaveResult::Persisted);
+		CHECK(manager.saveAll());
+		manager.shutdownAsync([&](bool success) {
+			CHECK(success && manager.hasFailedRecovery(7));
+			g_reactor.shutdown();
+		});
+	});
+	CHECK(number("SELECT COUNT(*) AS value FROM player_save_async_pending") == 1);
 }
 
 TEST_CASE(connection_loss_before_commit_preserves_the_durable_journal)
@@ -547,6 +600,31 @@ TEST_CASE(synchronous_follow_up_waits_for_prior_callbacks_before_shutdown)
 	CHECK(priorCompleted && shutdownOK && !shutdownWasEarly);
 }
 
+TEST_CASE(rejected_follow_up_completes_every_callback_before_shutdown)
+{
+	reset();
+	SaveManager manager;
+	unsigned completions = 0;
+	bool priorCompleted = false, shutdownCompleted = false;
+	dispatch([&] {
+		SaveManagerTestAccess::markBusy(manager, [&](bool success) { priorCompleted = success; });
+		for (unsigned i = 0; i < 20; ++i) {
+			CHECK(manager.saveAll([&](bool success) {
+				CHECK(!success);
+				++completions;
+				manager.shutdownAsync([&](bool drained) {
+					CHECK(!drained && priorCompleted);
+					shutdownCompleted = true;
+				});
+			}));
+		}
+		SaveManagerTestAccess::blockPersistence(manager);
+		SaveManagerTestAccess::complete(manager);
+		CHECK(shutdownCompleted && completions == 20);
+		g_reactor.shutdown();
+	});
+}
+
 TEST_CASE(production_snapshot_uses_absolute_online_time_and_skips_disabled_bestiary)
 {
 	reset();
@@ -679,7 +757,56 @@ TEST_CASE(worker_rejection_does_not_strand_an_in_flight_save)
 	CHECK(manager.hasFailedRecovery(7));
 }
 
-int main()
+#ifndef _WIN32
+// Test-only export lets the unmodified production GDB crash script exercise
+// its inferior-call wait without crashing a real server or using its database.
+extern "C" __attribute__((used)) bool saveServer() { return g_game.saveCrashStateAndWait(); }
+#endif
+
+// Exercise the same wait/drain method called by the GDB export, without
+// faulting a real game server. Held workers prove acceptance is not completion.
+void runCrashSaveWait(std::string_view mode)
+{
+	reset();
+	WorkersHeld held;
+	std::thread caller;
+	std::atomic<bool> returned{false};
+	bool result = true, drained = false;
+	const bool fail = mode == "--crash-save-failure";
+	const bool timeout = mode == "--crash-save-timeout";
+	const bool debugger = mode == "--gdb-save-wait";
+	CHECK(!g_game.saveCrashStateAndWait(10)); // Stopped dispatcher rejects immediately.
+	dispatch([&] {
+		CHECK(!g_game.saveCrashStateAndWait(10)); // Never block the dispatcher on itself.
+		SaveManagerTestAccess::queue(g_saveManager, save(1));
+		auto latest = save(2);
+		if (fail) latest.queries.push_back("UPDATE nonexistent_crash_fixture SET x=1");
+		SaveManagerTestAccess::queue(g_saveManager, std::move(latest));
+		g_saveManager.drainPlayerFlushAsync(7, [&](bool success) {
+			drained = success;
+			g_scheduler.addEvent(10, [] { g_reactor.shutdown(); });
+		});
+		caller = std::thread([&] {
+#ifndef _WIN32
+			if (debugger) std::raise(SIGUSR1); // GDB injects saveServer on this non-dispatcher thread.
+#endif
+			result = g_game.saveCrashStateAndWait(timeout ? 20 : 5000);
+			returned = true;
+		});
+		g_scheduler.addEvent(250, [&] {
+			CHECK(returned == timeout);
+			held.unblock();
+		});
+	});
+	caller.join();
+	CHECK(returned && result == (!fail && !timeout) && drained == !fail);
+	CHECK(!g_saveManager.hasPendingPlayerSave(7));
+	CHECK(number("SELECT save_generation AS value FROM players WHERE id=7") == (fail ? 1 : 2));
+	CHECK(number("SELECT COUNT(*) AS value FROM player_save_journal") == (fail ? 1 : 0));
+	std::cout << "Emergency save wait/drain regression passed: " << mode << '\n';
+}
+
+int main(int argc, char** argv)
 {
 	const char* name = std::getenv("TFS_SAVE_TEST_DB");
 	if (!name) {
@@ -725,7 +852,15 @@ int main()
 		sql("CREATE TABLE IF NOT EXISTS `house_lists` (`house_id` INT, `listid` INT, `list` TEXT) ENGINE=InnoDB");
 		sql("CREATE TABLE IF NOT EXISTS `kv_store` (`key_name` VARCHAR(255) PRIMARY KEY, `timestamp` BIGINT, `value` LONGBLOB) ENGINE=InnoDB");
 		g_threadPool.start(4);
-		const int result = tfs::tests::run();
+		int result = 0;
+		if (argc == 2) {
+			const std::string_view mode = argv[1];
+			CHECK(mode == "--crash-save-wait" || mode == "--crash-save-failure" || mode == "--crash-save-timeout" ||
+			      mode == "--gdb-save-wait");
+			runCrashSaveWait(mode);
+		} else {
+			result = tfs::tests::run();
+		}
 		g_threadPool.shutdown();
 		Database::shutdown();
 		return result;

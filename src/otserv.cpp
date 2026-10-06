@@ -1141,8 +1141,8 @@ void printServerVersion()
 // Called by GDB on crash — must be extern "C" and __attribute__((used)) to prevent stripping
 extern "C" __attribute__((used)) bool saveServer()
 {
-	// Request acceptance is not a durable-completion guarantee. A debugger call
-	// from the wrong thread must not traverse mutable world state.
-	return g_game.saveGameState(true);
+	// Capture only on the dispatcher, and wait for the latest worker chains.
+	// Returns false on rejection, failure or timeout, never on mere acceptance.
+	return g_game.saveCrashStateAndWait();
 }
 #endif

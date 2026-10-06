@@ -38,6 +38,13 @@ struct SaveManagerTestAccess
 		else
 			g_saveManager.flushInFlight.erase(7);
 	}
+	static void recoveryBlocked(bool value)
+	{
+		if (value)
+			g_saveManager.failedRecoveryGuids.insert(7);
+		else
+			g_saveManager.failedRecoveryGuids.erase(7);
+	}
 };
 
 namespace {
@@ -454,10 +461,56 @@ TEST_CASE(pending_old_save_and_wrong_recipient_cannot_remove_source_items)
 		SaveManagerTestAccess::busy(true);
 		CHECK(!world.house->setOwner(0, true, world.owner.get()));
 		SaveManagerTestAccess::busy(false);
+		SaveManagerTestAccess::recoveryBlocked(true);
+		CHECK(!world.house->setOwner(0, true, world.owner.get()));
+		SaveManagerTestAccess::recoveryBlocked(false);
 		Player wrong(nullptr);
 		wrong.setGUID(8);
 		CHECK(!world.house->setOwner(0, true, &wrong));
 		CHECK(world.root->getParent() == world.tile.get());
+		CHECK(number("SELECT owner AS value FROM houses WHERE id=701") == 7);
+	});
+}
+
+TEST_CASE(deleted_house_owner_releases_ownership_without_moving_items)
+{
+	World world;
+	const auto before = db().storeQuery("SELECT data FROM tile_store WHERE house_id=701");
+	CHECK(before);
+	const std::string image(before->getString("data"));
+	sql("DELETE FROM players WHERE id=7");
+	dispatch([&] {
+		CHECK(world.house->setOwner(0));
+		CHECK(world.house->getOwner() == 0 && world.root->getParent() == world.tile.get());
+		CHECK(count(*world.owner, *world.tile).swords == 1);
+		CHECK(number("SELECT owner AS value FROM houses WHERE id=701") == 0);
+		const auto after = db().storeQuery("SELECT data FROM tile_store WHERE house_id=701");
+		CHECK(after && after->getString("data") == image);
+		CHECK(number("SELECT COUNT(*) AS value FROM house_lists WHERE house_id=701") == 0);
+	});
+}
+
+TEST_CASE(missing_guild_releases_ownership_without_moving_items)
+{
+	World world;
+	CHECK(number("SELECT COUNT(*) AS value FROM guilds WHERE id=7") == 0);
+	world.house->setType(HOUSE_TYPE_GUILDHALL);
+	dispatch([&] {
+		CHECK(world.house->setOwner(0));
+		CHECK(world.house->getOwner() == 0 && world.root->getParent() == world.tile.get());
+		CHECK(count(*world.owner, *world.tile).swords == 1);
+		CHECK(number("SELECT owner AS value FROM houses WHERE id=701") == 0);
+		CHECK(number("SELECT COUNT(*) AS value FROM player_inboxitems WHERE player_id=7") == 0);
+	});
+}
+
+TEST_CASE(existing_owner_load_failure_cannot_be_treated_as_a_deleted_owner)
+{
+	World world;
+	sql("UPDATE players SET group_id=65535 WHERE id=7");
+	dispatch([&] {
+		CHECK(!world.house->setOwner(0));
+		CHECK(world.house->getOwner() == 7 && world.root->getParent() == world.tile.get());
 		CHECK(number("SELECT owner AS value FROM houses WHERE id=701") == 7);
 	});
 }

@@ -180,6 +180,9 @@ jobs:
           sudo systemctl start mariadb
           sudo mariadb -e 'CREATE DATABASE tfs_save_audit_ci CHARACTER SET utf8mb4;'
           sudo env TFS_SAVE_TEST_DB=tfs_save_audit_ci ./build/src/tests/test_save_persistence
+          sudo env TFS_SAVE_TEST_DB=tfs_save_audit_ci ./build/src/tests/test_save_persistence --crash-save-wait
+          sudo env TFS_SAVE_TEST_DB=tfs_save_audit_ci ./build/src/tests/test_save_persistence --crash-save-failure
+          sudo env TFS_SAVE_TEST_DB=tfs_save_audit_ci ./build/src/tests/test_save_persistence --crash-save-timeout
 
       - name: Run atomic house transfers and existing dupe scenarios
         run: |

@@ -87,6 +87,7 @@ SaveResult SaveManager::savePlayer(Player* player)
 	// Public per-player async saves retain WAL-durable acceptance. Global saves
 	// write their journals on workers and claim durability only on completion.
 	if (!IOLoginData::writePlayerJournal(*save)) {
+		sessionSaveFailed = true;
 		failedRecoveryGuids.insert(guid);
 		return SaveResult::Failed;
 	}
@@ -132,13 +133,17 @@ SaveResult SaveManager::savePlayerSync(Player* player, bool allowDurableQueue)
 	if (hasPendingPlayerSave(guid) && !allowDurableQueue) return SaveResult::Failed;
 	auto save = snapshot(player);
 	if (!save) {
-		if (allowDurableQueue) failedRecoveryGuids.insert(guid);
+		if (allowDurableQueue) {
+			sessionSaveFailed = true;
+			failedRecoveryGuids.insert(guid);
+		}
 		return SaveResult::Failed;
 	}
 	// Offline transfer callers such as mail restore their mutation on sync failure.
 	// Do not leave a replayable snapshot of that rolled-back transfer behind.
 	// Logout cannot restore its removed Player, so it explicitly requires WAL.
 	if (allowDurableQueue && !IOLoginData::writePlayerJournal(*save)) {
+		sessionSaveFailed = true;
 		failedRecoveryGuids.insert(guid);
 		LOG_ERROR("[SaveManager] Journal write failed for guid={}; latest save was not accepted as durable.", guid);
 		return SaveResult::Failed;
@@ -155,9 +160,13 @@ SaveResult SaveManager::savePlayerSync(Player* player, bool allowDurableQueue)
 		player->acknowledgeBestiaryDirty({save->bestiarySnapshotId, save->snapshotModifiedBestiaryRaceIds});
 		return SaveResult::Persisted;
 	}
-	failedRecoveryGuids.insert(guid);
-	LOG_ERROR("[SaveManager] Player commit failed for guid={}; login blocked. {}", guid,
-	          allowDurableQueue ? "Logout journal retained." : "Synchronous mutation was not accepted as durable.");
+	if (allowDurableQueue) {
+		sessionSaveFailed = true;
+		failedRecoveryGuids.insert(guid);
+	}
+	LOG_ERROR("[SaveManager] Player commit failed for guid={}. {}", guid,
+	          allowDurableQueue ? "Login blocked; logout journal retained."
+	                            : "Synchronous mutation was not accepted as durable; caller must restore it.");
 	return SaveResult::Failed;
 }
 
@@ -341,6 +350,7 @@ void SaveManager::onPlayerFlushed(uint32_t guid, bool tracked, bool success, IOL
 	} else {
 		flushInFlight.erase(guid);
 		if (!success) {
+			sessionSaveFailed = true;
 			failedRecoveryGuids.insert(guid);
 			LOG_ERROR("[SaveManager] Save chain failed for guid={}; login and new saves are blocked.", guid);
 		}
@@ -373,6 +383,7 @@ void SaveManager::finishSaveGeneration()
 {
 	lastSaveDurationMs.store(static_cast<uint64_t>(saveClock() - saveStartedMs));
 	const bool success = generationSucceeded;
+	sessionSaveFailed |= !success;
 	LOG_INFO("[SaveManager] Generation {}: {} after {}ms.", saveGenerationId, success ? "durably completed" : "FAILED",
 	         getLastSaveTime());
 	saving.store(false, std::memory_order_release);
@@ -394,8 +405,12 @@ void SaveManager::finishSaveGeneration()
 			const bool previousAccepting = accepting;
 			accepting = !persistenceBlocked;
 			saveCallbacks = std::move(nextCallbacks);
-			saveAll();
+			const bool scheduled = saveAll();
 			accepting = previousAccepting && !shutdownRequested && !persistenceBlocked;
+			if (!scheduled) {
+				auto rejected = std::exchange(saveCallbacks, {});
+				for (auto& callback : rejected) callback(false);
+			}
 		}
 		for (auto& callback : callbacks) callback(success);
 	}
@@ -462,7 +477,7 @@ void SaveManager::finishShutdown()
 	    !pendingFlushes.empty())
 		return;
 	auto callbacks = std::move(shutdownCallbacks);
-	for (auto& callback : callbacks) callback(!persistenceBlocked && failedRecoveryGuids.empty() && generationSucceeded);
+	for (auto& callback : callbacks) callback(!persistenceBlocked && !sessionSaveFailed);
 }
 
 bool SaveManager::recoverPendingFlushes()
