@@ -3376,7 +3376,7 @@ void Player::onSendContainer(const Container* container)
 		return;
 	}
 
-	bool hasParent = dynamic_cast<const Container*>(container->getParent()) != nullptr;
+	bool hasParent = containerHasParent(container, this);
 	for (auto it = openContainers.begin(); it != openContainers.end();) {
 		OpenContainer& openContainer = it->second;
 		auto openContainerRef = openContainer.container.lock();

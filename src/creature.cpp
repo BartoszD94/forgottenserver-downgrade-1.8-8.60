@@ -250,7 +250,6 @@ void Creature::onThink(uint32_t interval)
 		walkUpdateTicks += interval;
 		if (forceUpdateFollowPath || walkUpdateTicks >= 2000) {
 			walkUpdateTicks = 0;
-			forceUpdateFollowPath = false;
 			requestFollowPathUpdate();
 		}
 	}
@@ -554,11 +553,21 @@ void Creature::onCreatureMove(Creature* creature, const Tile* newTile, const Pos
 	}
 
 	if (auto fc = followCreature.lock(); creature == fc.get() || (creature == this && fc)) {
-		// A successful step can consume the existing route. Target movement,
-		// teleport/floor change, exhausted routes and blocked steps still refresh.
-		if (hasFollowPath &&
-		    (creature != this || teleport || newPos.z != oldPos.z || listWalkDir.empty() || forceUpdateFollowPath)) {
-			requestFollowPathUpdate();
+		if (hasFollowPath) {
+			// Consume successful steps without discarding the route. Urgent changes
+			// bypass the monster target-step budget; normal target steps retain it.
+			bool shouldRepath = teleport || newPos.z != oldPos.z || forceUpdateFollowPath;
+			if (!shouldRepath) {
+				if (creature == fc.get()) {
+					Monster* monster = getMonster();
+					shouldRepath = !monster || monster->shouldRepathAfterTargetStep();
+				} else {
+					shouldRepath = listWalkDir.empty();
+				}
+			}
+			if (shouldRepath) {
+				requestFollowPathUpdate();
+			}
 		}
 
 		auto masterCreature = master.lock();
@@ -1157,6 +1166,8 @@ void Creature::getPathSearchParams(const Creature*, FindPathParams& fpp) const
 void Creature::goToFollowCreature()
 {
 	PerformanceScope performanceScope(PerformanceMetric::CreatureGoToFollow);
+	// Keep forced requests latched until this queued update is actually handled.
+	forceUpdateFollowPath = false;
 	if (auto fc = followCreature.lock()) {
 		FindPathParams fpp;
 		getPathSearchParams(fc.get(), fpp);
@@ -1221,7 +1232,6 @@ bool Creature::setFollowCreature(Creature* creature)
 		isUpdatingPath = false;
 		const Position& creaturePos = creature->getPosition();
 		if (creaturePos.z != getPosition().z || !canSee(creaturePos)) {
-			isUpdatingPath = false;
 			hasFollowPath = false;
 			followCreature.reset();
 			return false;
@@ -1236,7 +1246,6 @@ bool Creature::setFollowCreature(Creature* creature)
 		forceUpdateFollowPath = false;
 		auto creatureRef = getSharedCreature(creature);
 		if (!creatureRef) {
-			isUpdatingPath = false;
 			hasFollowPath = false;
 			followCreature.reset();
 			return false;
