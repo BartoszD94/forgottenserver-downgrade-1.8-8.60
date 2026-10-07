@@ -6952,6 +6952,15 @@ bool Player::isPremium() const
 
 void Player::setPremiumTime(time_t premiumEndsAt) { this->premiumEndsAt = premiumEndsAt; }
 
+const std::shared_ptr<KV>& Player::getSettingsKV() const
+{
+	if (!cachedPlayerSettings_) {
+		cachedPlayerSettings_ =
+		    KVStore::getInstance().scoped("player")->scoped(fmt::format("{}", getGUID()))->scoped("settings");
+	}
+	return cachedPlayerSettings_;
+}
+
 bool Player::checkChainSystem() const
 {
 	if (!ConfigManager::getBoolean(ConfigManager::CHAIN_SYSTEM_ENABLED)) {
@@ -6966,10 +6975,7 @@ bool Player::checkChainSystem() const
 		return false;
 	}
 
-	if (!cachedPlayerSettings_) {
-		cachedPlayerSettings_ = KVStore::getInstance().scoped("player")->scoped(fmt::format("{}", getGUID()))->scoped("settings");
-	}
-	auto chainValue = cachedPlayerSettings_->get("chainSystem");
+	auto chainValue = getSettingsKV()->get("chainSystem");
 	if (chainValue.has_value()) {
 		return chainValue->get<BooleanType>();
 	}
@@ -6980,7 +6986,7 @@ bool Player::checkChainSystem() const
 	}
 
 	const bool enabled = legacyValue.value() == 1;
-	cachedPlayerSettings_->set("chainSystem", ValueWrapper(enabled));
+	getSettingsKV()->set("chainSystem", ValueWrapper(enabled));
 	return enabled;
 }
 
@@ -6994,10 +7000,7 @@ bool Player::checkCleaveSystem() const
 		return false;
 	}
 
-	if (!cachedPlayerSettings_) {
-		cachedPlayerSettings_ = KVStore::getInstance().scoped("player")->scoped(fmt::format("{}", getGUID()))->scoped("settings");
-	}
-	auto cleaveValue = cachedPlayerSettings_->get("cleaveSystem");
+	auto cleaveValue = getSettingsKV()->get("cleaveSystem");
 	if (cleaveValue.has_value()) {
 		return cleaveValue->get<BooleanType>();
 	}
@@ -8116,8 +8119,9 @@ void Player::setQuickLootFallbackToMainContainer(bool fallback)
 
 bool Player::isQuickLootAutoEnabled() const
 {
-	auto settings = KVStore::getInstance().scoped("player")->scoped(fmt::format("{}", getGUID()))->scoped("settings");
-	const auto value = settings->get("quickLoot", true);
+	// Settings written by talkactions are authoritative before the next database
+	// flush. Forcing a reload here would ignore those pending on/off changes.
+	const auto value = getSettingsKV()->get("quickLoot");
 	return value.has_value() && value->get<BooleanType>();
 }
 

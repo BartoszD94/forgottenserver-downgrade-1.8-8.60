@@ -134,4 +134,18 @@ TEST_CASE(xtea_diagnostics_count_calls_and_bytes_only_when_enabled)
 	CHECK(PerformanceMetricsTestAccess::metricCalls(*metrics, PerformanceMetric::ProtocolXteaDecrypt) == 4000);
 }
 
+TEST_CASE(database_and_splash_metrics_are_opt_in)
+{
+	auto metrics = std::make_unique<PerformanceMetrics>();
+	for (auto metric : {PerformanceMetric::DatabaseQueryDispatcher, PerformanceMetric::CombatSplash}) {
+		metrics->record(metric, 100);
+		CHECK(PerformanceMetricsTestAccess::metricCalls(*metrics, metric) == 0);
+	}
+	metrics->setEnabled(true);
+	for (auto metric : {PerformanceMetric::DatabaseQueryDispatcher, PerformanceMetric::CombatSplash}) {
+		metrics->record(metric, 100);
+		CHECK(PerformanceMetricsTestAccess::metricCalls(*metrics, metric) == 1);
+	}
+}
+
 TFS_TEST_MAIN()

@@ -1733,6 +1733,7 @@ public:
 	int32_t totalDropBonus = 0;
 
 private:
+	const std::shared_ptr<KV>& getSettingsKV() const;
 	mutable std::shared_ptr<KV> cachedPlayerSettings_;
 
 	struct PreyCombatBonus {
@@ -2068,6 +2069,7 @@ private:
 	friend class ProtocolSpectator;
 	friend struct CreatureWalkTestAccess;
 	friend struct QuickLootTestAccess;
+	friend struct PlayerSettingsTestAccess;
 };
 
 #endif

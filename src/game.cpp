@@ -6941,6 +6941,7 @@ void Game::combatGetTypeInfo(CombatType_t combatType, Creature* target, TextColo
 			}
 
 			if (splash) {
+				PerformanceScope splashScope(PerformanceMetric::CombatSplash);
 				splash->setInstanceID(target->getInstanceID());
 				// targetTile is captured once and reused — same tile where the
 				// PZ check was made; splash is only created when tile != nullptr.

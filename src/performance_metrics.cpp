@@ -75,6 +75,8 @@ constexpr std::array<std::string_view, static_cast<size_t>(PerformanceMetric::Co
     "Protocol::xteaDecrypt",
     "Protocol::cryptoHeader",
     "Connection::enqueue",
+    "Database::query@dispatcher",
+    "Combat::splash",
 };
 
 constexpr std::array<std::string_view, static_cast<size_t>(CombatWork::Count)> COMBAT_WORK_NAMES = {
