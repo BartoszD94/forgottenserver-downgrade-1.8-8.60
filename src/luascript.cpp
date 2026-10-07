@@ -3215,6 +3215,7 @@ void LuaScriptInterface::registerFunctions()
 	registerEnumIn("configKeys", ConfigManager::SOULPIT_SYSTEM_ENABLED);
 	registerEnumIn("configKeys", ConfigManager::SOULSEALS_SYSTEM_ENABLED);
 	registerEnumIn("configKeys", ConfigManager::CLEAVE_SYSTEM_ENABLED);
+	registerEnumIn("configKeys", ConfigManager::SPECTATOR_COMBAT_MESSAGES);
 	registerEnumIn("configKeys", ConfigManager::RELOAD_COMMAND_ENABLED);
 
 	registerEnumIn("configKeys", ConfigManager::MAP_NAME);

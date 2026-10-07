@@ -6945,9 +6945,30 @@ void Game::combatGetTypeInfo(CombatType_t combatType, Creature* target, TextColo
 			if (splash) {
 				PerformanceScope splashScope(PerformanceMetric::CombatSplash);
 				splash->setInstanceID(target->getInstanceID());
-				// targetTile is captured once and reused — same tile where the
-				// PZ check was made; splash is only created when tile != nullptr.
-				if (internalAddItem(targetTile, splash.get(), INDEX_WHEREEVER, FLAG_NOLIMIT) == RETURNVALUE_NOERROR) {
+
+				// The same splash already lies here (every hit on a creature standing still): restart its decay
+				// instead of remove + add, which notified every player in range twice and queried spectators
+				// four times per hit. Players see no difference.
+				Item* sameSplash = nullptr;
+				if (const TileItemVector* items = targetTile ? targetTile->getItemList() : nullptr) {
+					for (auto it = items->getBeginTopItem(), end = items->getEndTopItem(); it != end; ++it) {
+						Item* item = it->get();
+						if (item->getID() == splash->getID() && item->getFluidType() == splash->getFluidType() &&
+						    item->getInstanceID() == splash->getInstanceID()) {
+							sameSplash = item;
+							break;
+						}
+					}
+				}
+
+				if (sameSplash) {
+					stopDecay(sameSplash);
+					sameSplash->setDefaultDuration();
+					startDecay(sameSplash);
+					ReleaseItem(splash.get());
+				} else if (internalAddItem(targetTile, splash.get(), INDEX_WHEREEVER, FLAG_NOLIMIT) ==
+				           RETURNVALUE_NOERROR) {
+					// targetTile is captured once and reused: same tile where the PZ check was made.
 					splash->startDecaying();
 				} else {
 					ReleaseItem(splash.get());
@@ -7257,6 +7278,7 @@ bool Game::combatChangeHealth(Creature* attacker, Creature* target, CombatDamage
 
 			addAnimatedText(spectators, fmt::format("{:d}", realHealthChange), targetPos,
                       		static_cast<TextColor_t>(getInteger(ConfigManager::HEALTH_GAIN_COLOUR)));
+			const bool showSpectatorMessages = getBoolean(ConfigManager::SPECTATOR_COMBAT_MESSAGES);
 			for (const auto& spectator : spectators) {
 				Player* tmpPlayer = static_cast<Player*>(spectator.get());
 				if (tmpPlayer == attackerPlayer && attackerPlayer != targetPlayer) {
@@ -7273,6 +7295,9 @@ bool Game::combatChangeHealth(Creature* attacker, Creature* target, CombatDamage
 						                           damageString);
 					}
 				} else {
+					if (!showSpectatorMessages) {
+						continue; // 8.60: only the attacker and the target get combat text
+					}
 					message.type = MESSAGE_STATUS_DEFAULT;
 					if (spectatorMessage.empty()) {
 						if (!attacker) {
@@ -7290,6 +7315,7 @@ bool Game::combatChangeHealth(Creature* attacker, Creature* target, CombatDamage
 						spectatorMessage[0] = static_cast<char>(std::toupper(spectatorMessage[0]));
 					}
 					message.type = MESSAGE_STATUS_DEFAULT;
+					message.text = spectatorMessage;
 				}
 				tmpPlayer->sendTextMessage(message);
 			}
@@ -7404,6 +7430,7 @@ bool Game::combatChangeHealth(Creature* attacker, Creature* target, CombatDamage
 				const uint16_t preyBoost = getPreyDamageBoostPercent(std::dynamic_pointer_cast<Player>(attackerRef), targetRef);
 				const uint16_t preyReduction = getPreyDamageReductionPercent(std::dynamic_pointer_cast<Player>(targetRef), attackerRef);
 
+				const bool showSpectatorMessages = getBoolean(ConfigManager::SPECTATOR_COMBAT_MESSAGES);
 				for (const auto& spectator : spectators) {
 					Player* tmpPlayer = static_cast<Player*>(spectator.get());
 					if (tmpPlayer->getPosition().z != targetPos.z) {
@@ -7432,6 +7459,9 @@ bool Game::combatChangeHealth(Creature* attacker, Creature* target, CombatDamage
 							}
 						}
 					} else {
+						if (!showSpectatorMessages) {
+							continue; // 8.60: only the attacker and the target get combat text
+						}
 						message.type = MESSAGE_STATUS_DEFAULT;
 						if (spectatorMessage.empty()) {
 							if (!attacker) {
@@ -7448,6 +7478,7 @@ bool Game::combatChangeHealth(Creature* attacker, Creature* target, CombatDamage
 							}
 							spectatorMessage[0] = static_cast<char>(std::toupper(spectatorMessage[0]));
 						}
+						message.text = spectatorMessage;
 					}
 					tmpPlayer->sendTextMessage(message);
 				}
@@ -7551,6 +7582,7 @@ bool Game::combatChangeHealth(Creature* attacker, Creature* target, CombatDamage
 			const uint16_t preyBoost = getPreyDamageBoostPercent(std::dynamic_pointer_cast<Player>(attackerRef), targetRef);
 			const uint16_t preyReduction = getPreyDamageReductionPercent(std::dynamic_pointer_cast<Player>(targetRef), attackerRef);
 
+			const bool showSpectatorMessages = getBoolean(ConfigManager::SPECTATOR_COMBAT_MESSAGES);
 			for (const auto& spectator : spectators) {
 				Player* tmpPlayer = static_cast<Player*>(spectator.get());
 				if (tmpPlayer->getPosition().z != targetPos.z) {
@@ -7579,6 +7611,9 @@ bool Game::combatChangeHealth(Creature* attacker, Creature* target, CombatDamage
 						}
 					}
 				} else {
+					if (!showSpectatorMessages) {
+						continue; // 8.60: only the attacker and the target get combat text
+					}
 					message.type = MESSAGE_STATUS_DEFAULT;
 					if (spectatorMessage.empty()) {
 						if (!attacker) {
@@ -7827,6 +7862,7 @@ bool Game::combatChangeMana(Creature* attacker, Creature* target, CombatDamage& 
 		addAnimatedText(spectators, fmt::format("{:+d}", manaLoss), targetPos,
 				static_cast<TextColor_t>(getInteger(ConfigManager::MANA_LOSS_COLOUR)));
 
+		const bool showSpectatorMessages = getBoolean(ConfigManager::SPECTATOR_COMBAT_MESSAGES);
 		for (const auto& spectator : spectators) {
 			Player* tmpPlayer = static_cast<Player*>(spectator.get());
 			if (tmpPlayer == attackerPlayer && attackerPlayer != targetPlayer) {
@@ -7845,6 +7881,9 @@ bool Game::combatChangeMana(Creature* attacker, Creature* target, CombatDamage& 
 					                           attacker->getNameDescription());
 				}
 			} else {
+				if (!showSpectatorMessages) {
+					continue; // 8.60: only the attacker and the target get combat text
+				}
 				message.type = MESSAGE_STATUS_DEFAULT;
 				if (spectatorMessage.empty()) {
 					if (!attacker) {
@@ -7860,6 +7899,7 @@ bool Game::combatChangeMana(Creature* attacker, Creature* target, CombatDamage& 
 					}
 					spectatorMessage[0] = static_cast<char>(std::toupper(spectatorMessage[0]));
 				}
+				message.text = spectatorMessage;
 			}
 			tmpPlayer->sendTextMessage(message);
 		}

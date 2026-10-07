@@ -478,6 +478,7 @@ bool ConfigManager::load()
 	booleans[Boolean::ASTRA_HIRELING_PROTOCOL_ENABLED] =
 	    getGlobalBoolean(L, "astraHirelingProtocolEnabled", false);
 	booleans[Boolean::COLORIZED_LOOT_VALUE] = getGlobalBoolean(L, "enableColorizedLootValue", false);
+	booleans[Boolean::SPECTATOR_COMBAT_MESSAGES] = getGlobalBoolean(L, "showSpectatorCombatMessages", false);
 	booleans[Boolean::ITEM_TIER_DISPLAY] = getGlobalBoolean(L, "enableItemTierDisplay", false);
 	booleans[Boolean::ITEM_UPGRADE_CLASSIFICATION] = getGlobalBoolean(L, "enableItemUpgradeClassification", false);
 	booleans[Boolean::QUICK_LOOT_ENABLED] = getGlobalBoolean(L, "enableQuickLoot", false);

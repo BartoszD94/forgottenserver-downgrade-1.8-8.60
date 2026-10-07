@@ -185,6 +185,9 @@ monsterFactionSystem = false
 monsterFactionRequirePlayerNearby = true
 monsterFactionPreferPlayers = true
 enableColorizedLootValue = false
+-- Combat text ("X loses N hitpoints due to an attack by Y") for players who are neither the attacker nor the
+-- target. Real 8.60 did not send it; with many players together it is one packet per spectator per hit.
+showSpectatorCombatMessages = false
 enableItemTierDisplay = false
 enableItemUpgradeClassification = false
 enableQuickLoot = true
