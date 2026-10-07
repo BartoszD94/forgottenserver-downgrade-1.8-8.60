@@ -1700,7 +1700,13 @@ public:
 	bool checkChainSystem() const;
 	bool checkCleaveSystem() const;
 
-	void resetCachedSettings() { cachedPlayerSettings_ = nullptr; }
+	void resetCachedSettings()
+	{
+		cachedPlayerSettings_ = nullptr;
+		chainSettingLoaded_ = false;
+		cleaveSettingLoaded_ = false;
+		cachedQuickLootAuto_.reset();
+	}
 
 	bool hasDebugAssertSent() const { return client ? client->debugAssertSent : false; }
 
@@ -1733,7 +1739,18 @@ public:
 	int32_t totalDropBonus = 0;
 
 private:
+	const std::shared_ptr<KV>& getSettingsKV() const;
+
 	mutable std::shared_ptr<KV> cachedPlayerSettings_;
+	// KVStore::get() runs a synchronous SELECT on every cache miss and does not
+	// remember misses, so a player who never used !chain/!cleave/!quickloot cost
+	// one database round trip per attack or kill. Resolve each setting once;
+	// writers must call resetCachedSettings(), as the bundled talkactions do.
+	mutable std::optional<bool> cachedChainSetting_;
+	mutable std::optional<bool> cachedCleaveSetting_;
+	mutable std::optional<bool> cachedQuickLootAuto_;
+	mutable bool chainSettingLoaded_ = false;
+	mutable bool cleaveSettingLoaded_ = false;
 
 	struct PreyCombatBonus {
 		uint16_t damageBoost = 0;

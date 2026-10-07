@@ -6966,21 +6966,24 @@ bool Player::checkChainSystem() const
 		return false;
 	}
 
-	if (!cachedPlayerSettings_) {
-		cachedPlayerSettings_ = KVStore::getInstance().scoped("player")->scoped(fmt::format("{}", getGUID()))->scoped("settings");
+	if (!chainSettingLoaded_) {
+		const auto chainValue = getSettingsKV()->get("chainSystem");
+		cachedChainSetting_ = chainValue ? std::optional<bool>(chainValue->get<BooleanType>()) : std::nullopt;
+		chainSettingLoaded_ = true;
 	}
-	auto chainValue = cachedPlayerSettings_->get("chainSystem");
-	if (chainValue.has_value()) {
-		return chainValue->get<BooleanType>();
+	if (cachedChainSetting_) {
+		return *cachedChainSetting_;
 	}
 
+	// Storage is in memory, so a later legacy write is still noticed here.
 	const auto legacyValue = getStorageValue(CHAIN_SYSTEM_STORAGE);
 	if (!legacyValue.has_value()) {
 		return false;
 	}
 
 	const bool enabled = legacyValue.value() == 1;
-	cachedPlayerSettings_->set("chainSystem", ValueWrapper(enabled));
+	getSettingsKV()->set("chainSystem", ValueWrapper(enabled));
+	cachedChainSetting_ = enabled;
 	return enabled;
 }
 
@@ -6994,15 +6997,21 @@ bool Player::checkCleaveSystem() const
 		return false;
 	}
 
+	if (!cleaveSettingLoaded_) {
+		const auto cleaveValue = getSettingsKV()->get("cleaveSystem");
+		cachedCleaveSetting_ = cleaveValue ? std::optional<bool>(cleaveValue->get<BooleanType>()) : std::nullopt;
+		cleaveSettingLoaded_ = true;
+	}
+
+	return cachedCleaveSetting_.value_or(true); // enabled by default for vocations that can cleave
+}
+
+const std::shared_ptr<KV>& Player::getSettingsKV() const
+{
 	if (!cachedPlayerSettings_) {
 		cachedPlayerSettings_ = KVStore::getInstance().scoped("player")->scoped(fmt::format("{}", getGUID()))->scoped("settings");
 	}
-	auto cleaveValue = cachedPlayerSettings_->get("cleaveSystem");
-	if (cleaveValue.has_value()) {
-		return cleaveValue->get<BooleanType>();
-	}
-
-	return true; // enabled by default for vocations that can cleave
+	return cachedPlayerSettings_;
 }
 
 PartyShields_t Player::getPartyShield(const Player* player) const
@@ -8116,9 +8125,12 @@ void Player::setQuickLootFallbackToMainContainer(bool fallback)
 
 bool Player::isQuickLootAutoEnabled() const
 {
-	auto settings = KVStore::getInstance().scoped("player")->scoped(fmt::format("{}", getGUID()))->scoped("settings");
-	const auto value = settings->get("quickLoot", true);
-	return value.has_value() && value->get<BooleanType>();
+	// Called for every owned corpse; forceLoad used to query MariaDB each time.
+	if (!cachedQuickLootAuto_) {
+		const auto value = getSettingsKV()->get("quickLoot", true);
+		cachedQuickLootAuto_ = value.has_value() && value->get<BooleanType>();
+	}
+	return *cachedQuickLootAuto_;
 }
 
 void Player::ensureQuickLootStateLoaded()
