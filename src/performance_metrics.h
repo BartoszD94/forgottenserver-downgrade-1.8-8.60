@@ -72,6 +72,7 @@ enum class PerformanceMetric : uint8_t
 	ProtocolXteaDecrypt,
 	ProtocolCryptoHeader,
 	ConnectionEnqueue,
+	DatabaseDispatcherQuery,
 	Count,
 };
 

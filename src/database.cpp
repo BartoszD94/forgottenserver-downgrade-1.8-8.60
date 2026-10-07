@@ -4,7 +4,9 @@
 #include "otpch.h"
 
 #include "database.h"
+#include "performance_metrics.h"
 #include "stats.h"
+#include "tasks.h"
 
 #include "configmanager.h"
 
@@ -243,6 +245,24 @@ static void logQueryError(tfs::detail::Mysql_ptr& handle, std::string_view query
 	LOG_ERROR(fmt::format("[Error - mysql_real_query] Query: {}\nMessage: {}", query.substr(0, 256), mysql_error(handle.get())));
 }
 
+namespace {
+// A query on the dispatcher thread stalls the whole game loop for a database
+// round trip without using CPU, so it is worth seeing in every stress report.
+class DispatcherQueryScope
+{
+public:
+	DispatcherQueryScope()
+	{
+		if (g_dispatcher.isDispatcherThread()) {
+			scope.emplace(PerformanceMetric::DatabaseDispatcherQuery);
+		}
+	}
+
+private:
+	std::optional<PerformanceScope> scope;
+};
+} // namespace
+
 // Single-attempt query execution. Reconnect/retry is handled by the Database member methods.
 static bool executeQuery(tfs::detail::Mysql_ptr& handle, std::string_view query, bool logError = true)
 {
@@ -459,6 +479,7 @@ bool Database::executeQuery(std::string_view query)
 		return true;
 	}
 
+	DispatcherQueryScope dispatcherScope;
 	ConnectionContext& ctx = getContext();
 	if (!ctx.handle) {
 		LOG_ERROR(">> Database: not initialized.");
@@ -555,6 +576,7 @@ bool Database::executeQuery(std::string_view query)
 
 DBResult_ptr Database::storeQuery(std::string_view query)
 {
+	DispatcherQueryScope dispatcherScope;
 	ConnectionContext& ctx = getContext();
 	if (!ctx.handle) {
 		LOG_ERROR(">> Database: not initialized.");
