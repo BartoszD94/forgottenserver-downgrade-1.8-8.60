@@ -33,6 +33,7 @@ enum class PerformanceMetric : uint8_t
 	MapGetSpectators,
 	MonsterOnThink,
 	MonsterOnWalk,
+	MonsterCanWalkTo,
 	MonsterDoAttacking,
 	CombatSpellCastSpell,
 	CombatDoCombat,
@@ -74,6 +75,22 @@ enum class PerformanceMetric : uint8_t
 };
 
 // Fixed diagnostic counters/distributions; no maps or allocations in hot paths.
+enum class MovementWork : uint8_t
+{
+	SpectatorQueries,
+	SpectatorLeaves,
+	SpectatorCandidates,
+	SpectatorResults,
+	MovementEvents,
+	MovementRecipients,
+	WalkChecks,
+	WalkTileCacheHits,
+	WalkTileCacheMisses,
+	WalkFastRejects,
+	WalkQueryAddCalls,
+	Count,
+};
+
 enum class CombatWork : uint8_t
 {
 	Events,
@@ -208,6 +225,8 @@ public:
 	void recordReactorCallbackSource(uint64_t nanoseconds, std::string_view description, std::string_view origin,
 	                                 uint64_t queueNanoseconds = 0) noexcept;
 	void recordCombatWork(CombatWork counter, uint64_t value = 1) noexcept;
+	void recordMovementWork(MovementWork counter, uint64_t value = 1) noexcept;
+	uint64_t getMovementWork(MovementWork counter) const noexcept;
 	void recordCombatDistribution(CombatDistribution distribution, uint64_t value) noexcept;
 	void recordOutputPayload(uint8_t opcode, uint64_t bytes) noexcept;
 	void recordSerializerInitialization(uint64_t bytes) noexcept;
@@ -344,6 +363,7 @@ private:
 
 	ReactorData reactor;
 	PathData path;
+	std::array<std::atomic<uint64_t>, static_cast<size_t>(MovementWork::Count)> movementWork{};
 	AreaCombatData areaCombat;
 	NetworkData network;
 

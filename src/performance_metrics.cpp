@@ -37,6 +37,7 @@ constexpr std::array<std::string_view, static_cast<size_t>(PerformanceMetric::Co
     "Map::getSpectators",
     "Monster::onThink",
     "Monster::onWalk",
+    "Monster::canWalkTo",
     "Monster::doAttacking",
     "CombatSpell::castSpell",
     "Combat::doCombat",
@@ -92,6 +93,11 @@ constexpr std::array<std::string_view, static_cast<size_t>(CombatWork::Count)> C
     "append_bytes",
     "wire_messages",
     "wire_bytes",
+};
+constexpr std::array<std::string_view, static_cast<size_t>(MovementWork::Count)> MOVEMENT_WORK_NAMES = {
+    "spectator_queries", "spectator_leaves",    "spectator_candidates", "spectator_results",
+    "movement_events",   "movement_recipients", "walk_checks",          "walk_tile_hits",
+    "walk_tile_misses",  "walk_fast_rejects",   "walk_query_add",
 };
 constexpr std::array<std::string_view, static_cast<size_t>(CombatDistribution::Count)> DISTRIBUTION_NAMES = {
     "health_candidates", "effect_candidates",   "distance_candidates",
@@ -353,6 +359,18 @@ CombatPacketScope::~CombatPacketScope()
 		g_performanceMetrics.recordCombatDistribution(CombatDistribution::EventPayloadBytes, combatPacketBytes);
 		g_performanceMetrics.recordCombatDistribution(CombatDistribution::EventPayloadWrites, combatPacketWrites);
 	}
+}
+
+void PerformanceMetrics::recordMovementWork(MovementWork counter, uint64_t value) noexcept
+{
+	if (isEnabled()) {
+		movementWork[static_cast<size_t>(counter)].fetch_add(value, std::memory_order_relaxed);
+	}
+}
+
+uint64_t PerformanceMetrics::getMovementWork(MovementWork counter) const noexcept
+{
+	return movementWork[static_cast<size_t>(counter)].load(std::memory_order_relaxed);
 }
 
 void PerformanceMetrics::recordPathRequest(bool success, uint64_t nodesVisited, uint64_t tilesRead,
@@ -662,6 +680,10 @@ void PerformanceMetrics::maybeReport()
 		path.nodesVisited.exchange(0, std::memory_order_relaxed),
 		path.tilesRead.exchange(0, std::memory_order_relaxed),
 		path.pathLength.exchange(0, std::memory_order_relaxed));
+	report += "\n[Perf] movement_work";
+	for (size_t i = 0; i < movementWork.size(); ++i) {
+		report += fmt::format(" {}={}", MOVEMENT_WORK_NAMES[i], movementWork[i].exchange(0, std::memory_order_relaxed));
+	}
 	const uint64_t currentConnections = network.connectionsCurrent.load(std::memory_order_relaxed);
 	const uint64_t maximumConnections =
 		std::max(currentConnections,

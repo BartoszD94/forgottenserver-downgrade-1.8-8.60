@@ -32,11 +32,28 @@ TEST_CASE(disabled_diagnostics_do_not_record_work)
 {
 	auto metrics = std::make_unique<PerformanceMetrics>();
 	metrics->recordCombatWork(CombatWork::PayloadBytes, 12);
+	metrics->recordMovementWork(MovementWork::SpectatorCandidates, 25);
+	CHECK(metrics->getMovementWork(MovementWork::SpectatorCandidates) == 0);
 	metrics->recordCombatDistribution(CombatDistribution::EffectCandidates, 4);
 	metrics->recordReactorCallbackSource(100'000'000, "disabled", "test", 10);
 	CHECK(PerformanceMetricsTestAccess::work(*metrics, CombatWork::PayloadBytes) == 0);
 	CHECK(PerformanceMetricsTestAccess::distributionCalls(*metrics, CombatDistribution::EffectCandidates) == 0);
 	CHECK(PerformanceMetricsTestAccess::sourceCalls(*metrics, 0) == 0);
+}
+
+TEST_CASE(movement_attribution_is_fixed_and_opt_in)
+{
+	auto metrics = std::make_unique<PerformanceMetrics>();
+	metrics->setEnabled(true);
+	metrics->recordMovementWork(MovementWork::SpectatorQueries);
+	metrics->recordMovementWork(MovementWork::SpectatorCandidates, 300);
+	metrics->recordMovementWork(MovementWork::WalkTileCacheHits, 12);
+	CHECK(metrics->getMovementWork(MovementWork::SpectatorQueries) == 1);
+	CHECK(metrics->getMovementWork(MovementWork::SpectatorCandidates) == 300);
+	CHECK(metrics->getMovementWork(MovementWork::WalkTileCacheHits) == 12);
+	metrics->setEnabled(false);
+	metrics->recordMovementWork(MovementWork::SpectatorQueries);
+	CHECK(metrics->getMovementWork(MovementWork::SpectatorQueries) == 1);
 }
 
 TEST_CASE(callback_sources_are_bounded_and_count_overflow_and_thresholds)
