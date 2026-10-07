@@ -57,6 +57,7 @@ enum class PerformanceMetric : uint8_t
 	CombatBroadcastDistance,
 	CombatBroadcastText,
 	CombatAreaCollectTargets,
+	CombatSplash,
 	ProtocolMagicEffect,
 	ProtocolDistanceEffect,
 	ProtocolCreatureHealth,

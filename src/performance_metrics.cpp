@@ -61,6 +61,7 @@ constexpr std::array<std::string_view, static_cast<size_t>(PerformanceMetric::Co
     "Combat::broadcastDistance",
     "Combat::broadcastText",
     "Combat::area.collectTargets",
+    "Combat::splash",
     "ProtocolGame::sendMagicEffect",
     "ProtocolGame::sendDistanceShoot",
     "ProtocolGame::sendCreatureHealth",
