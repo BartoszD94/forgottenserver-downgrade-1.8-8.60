@@ -204,6 +204,17 @@ private:
 	}
 };
 
+// Server-to-client scratch message for ProtocolGame serializers. Every add*()
+// writes each byte it counts and OutputMessage::append() copies exactly
+// [INITIAL_BUFFER_POSITION, INITIAL_BUFFER_POSITION + getLength()), so the
+// 65,500-byte zero fill of the default constructor is never observable here.
+// Do not use it for received data, Lua messages, or with skipBytes() gaps.
+class OutgoingNetworkMessage final : public NetworkMessage
+{
+public:
+	OutgoingNetworkMessage() noexcept : NetworkMessage(UninitializedBuffer{}) {}
+};
+
 namespace tfs::net {
 
 std::shared_ptr<NetworkMessage> make_network_message();

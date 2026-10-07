@@ -206,6 +206,40 @@ TEST_CASE(output_append_and_string_fallback_keep_only_written_bytes)
 	CHECK(wireBytes(destination) == std::vector<uint8_t>({0xAA, 0x34, 0x12, 0, 0, 0, 0, 0xCC}));
 }
 
+TEST_CASE(outgoing_message_without_zero_fill_appends_only_written_bytes)
+{
+	const auto writePacket = [](NetworkMessage& msg) {
+		msg.addByte(0x6A); // Add tile item, production serializer primitives.
+		msg.add<uint16_t>(1000);
+		msg.add<uint16_t>(1000);
+		msg.addByte(7);
+		msg.addString(std::string(8193, 'x')); // Over-long string falls back to an empty field.
+		msg.addString("You lose 25 hitpoints.");
+		msg.addPaddingBytes(3);
+	};
+
+	auto outgoing = std::make_unique<OutgoingNetworkMessage>();
+	CHECK(outgoing->getLength() == 0);
+	CHECK(outgoing->getBufferPosition() == NetworkMessage::INITIAL_BUFFER_POSITION);
+	CHECK(!outgoing->isOverrun());
+	// Simulate whatever the stack held before, instead of the skipped zero fill.
+	std::fill_n(outgoing->getBuffer(), NETWORKMESSAGE_MAXSIZE, 0xA5);
+	writePacket(*outgoing);
+
+	auto zeroed = std::make_unique<NetworkMessage>();
+	writePacket(*zeroed);
+	CHECK(outgoing->getLength() == zeroed->getLength());
+
+	auto dirty = messageWithStorage(0xBB);
+	auto clean = messageWithStorage(0xBB);
+	dirty->append(*outgoing);
+	clean->append(*zeroed);
+	TestProtocol protocol(true, true);
+	protocol.onSendMessage(dirty);
+	protocol.onSendMessage(clean);
+	CHECK(wireBytes(dirty) == wireBytes(clean));
+}
+
 TEST_CASE(output_pool_reconstruction_resets_state_but_incoming_messages_stay_zeroed)
 {
 	{
