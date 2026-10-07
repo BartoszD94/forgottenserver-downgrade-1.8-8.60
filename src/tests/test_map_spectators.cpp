@@ -212,4 +212,73 @@ TEST_CASE(player_only_multifloor_query_matches_the_all_creature_player_set)
 	removeCreature(map, npc);
 }
 
+TEST_CASE(movement_snapshot_matches_two_live_queries_at_viewport_edges_and_floors)
+{
+	Map map;
+	std::vector<std::shared_ptr<TestCreature>> creatures;
+	// Dense boundary grid includes the diagonal bounding rectangle's extra corners.
+	for (uint8_t z = 5; z <= 10; ++z) {
+		for (uint16_t x = 88; x <= 113; ++x) {
+			for (uint16_t y = 88; y <= 113; ++y) {
+				auto creature = std::make_shared<TestMonster>();
+				addCreature(map, Position{x, y, z}, creature);
+				creatures.push_back(std::move(creature));
+			}
+		}
+	}
+	for (uint8_t z : {uint8_t{7}, uint8_t{8}}) {
+		const Position oldPos{100, 100, z};
+		for (int dx = -1; dx <= 1; ++dx) {
+			for (int dy = -1; dy <= 1; ++dy) {
+				const Position newPos{static_cast<uint16_t>(100 + dx), static_cast<uint16_t>(100 + dy), z};
+				SpectatorVec expected, next, actual;
+				map.getSpectators(expected, oldPos, true);
+				map.getSpectators(next, newPos, true);
+				expected.addSpectators(next);
+				expected.partitionByType();
+				map.getMovementSpectators(actual, oldPos, newPos, false);
+				CHECK(actual.size() == expected.size());
+				CHECK(std::ranges::equal(actual, expected));
+			}
+		}
+	}
+	for (const auto& creature : creatures) {
+		removeCreature(map, creature);
+	}
+}
+
+TEST_CASE(movement_snapshot_keeps_teleport_floor_instance_and_lifetime_semantics)
+{
+	Map map;
+	auto player = std::make_shared<TestPlayer>();
+	auto monster = std::make_shared<TestMonster>();
+	auto npc = std::make_shared<TestNpc>();
+	player->setInstanceID(42);
+	monster->setInstanceID(43);
+	addCreature(map, Position{0, 0, 7}, player);
+	addCreature(map, Position{65535, 65535, 8}, monster);
+	addCreature(map, Position{1, 1, 6}, npc);
+	for (const Position newPos : {Position{1, 1, 7}, Position{65535, 65535, 8}, Position{0, 0, 8}}) {
+		SpectatorVec expected, next, actual;
+		map.getSpectators(expected, Position{0, 0, 7}, true);
+		map.getSpectators(next, newPos, true);
+		expected.addSpectators(next);
+		expected.partitionByType();
+		map.getMovementSpectators(actual, Position{0, 0, 7}, newPos, newPos.z != 7);
+		CHECK(std::ranges::equal(actual, expected));
+		CHECK(actual.players().size() == expected.players().size());
+		CHECK(actual.npcs().size() == expected.npcs().size());
+	}
+	SpectatorVec pinned;
+	map.getMovementSpectators(pinned, Position{0, 0, 7}, Position{1, 1, 7}, false);
+	std::weak_ptr<TestPlayer> weak = player;
+	removeCreature(map, player);
+	player.reset();
+	CHECK(!weak.expired());
+	pinned = {};
+	CHECK(weak.expired());
+	removeCreature(map, monster);
+	removeCreature(map, npc);
+}
+
 TFS_TEST_MAIN()

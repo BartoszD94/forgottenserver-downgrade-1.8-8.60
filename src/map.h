@@ -198,6 +198,10 @@ public:
 
 	static bool save();
 
+	// Synchronous, owning snapshot: the exact union of the old/new viewports.
+	void getMovementSpectators(SpectatorVec& spectators, const Position& oldPos,
+	                           const Position& newPos, bool teleport);
+
 	/**
 	 * Get a single tile.
 	 * \returns A pointer to that tile.
